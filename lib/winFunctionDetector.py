@@ -1,3 +1,4 @@
+from __future__ import print_function
 import r2pipe
 import json
 import base64
