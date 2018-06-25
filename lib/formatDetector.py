@@ -1,8 +1,15 @@
+from __future__ import print_function
 import angr
 import claripy
 import time
 import timeout_decorator
 import IPython
+
+try:
+    xrange          # Python 2
+except NameError:
+    xrange = range  # Python 3
+
 
 '''
 Model either printf("User input") or printf("%s","Userinput")
@@ -81,7 +88,7 @@ class printFormat(angr.procedures.libc.printf.printf):
                         
                         return True
                 if state_copy.globals['inputType'] == "ARG":
-                    arg = state.globals['arg']
+                    arg = state_copy.globals['arg']
                     arg_str = str(state_copy.solver.eval(arg,cast_to=str))
                     if str_val in arg_str:
                         var_value = self.state.memory.load(var_loc)
@@ -163,4 +170,3 @@ def checkFormat(binary_name,inputType="STDIN"):
 
 
     
-

@@ -1,3 +1,4 @@
+from __future__ import print_function
 from pwn import *
 import binascii
 import string
