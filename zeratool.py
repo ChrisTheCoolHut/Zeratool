@@ -73,6 +73,8 @@ def main():
         properties['pwn_type']['results'] = formatExploiter.exploitFormat(args.file,properties)
         if properties['pwn_type'] is not None and 'flag_found' in properties['pwn_type'].keys() and properties['pwn_type']['results']['flag_found'] and args.url is not "":
             properties['pwn_type']['send_results'] = formatExploiter.getRemoteFormat(properties,remote_url=args.url,remote_port=int(args.port))
+    else:
+        print("[-] Can not determine vulnerable type")
 
-
-main()
+if __name__ == '__main__':
+    main()
