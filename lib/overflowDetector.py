@@ -145,7 +145,7 @@ def checkOverflow(binary_name,inputType="STDIN"):
 
 
     except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
-        print("[~] Keyboard Interupt")
+        print("[~] Keyboard Interrupt")
     if (inputType == "STDIN" or inputType == "LIBPWNABLE")and end_state is not None:
         stdin_str = repr(str(end_state.posix.dumps(0).replace('\x00','').replace('\x01','')))
         run_environ['input'] = stdin_str
@@ -154,15 +154,5 @@ def checkOverflow(binary_name,inputType="STDIN"):
         arg_str = repr(str(end_state.solver.eval(arg,cast_to=str)).replace('\x00','').replace('\x01',''))
         run_environ['input'] = arg_str
         print("[+] Triggerable with arg : {}".format(arg_str))
-       
+
     return run_environ
-
-
-    
-
-
-
-
-        
-
-        
