@@ -22,9 +22,8 @@ def checkOverflow(binary_name,inputType="STDIN"):
     if inputType == "STDIN":
         state = p.factory.full_init_state(args=argv)
     elif inputType == "LIBPWNABLE":
-        CFG = p.analyses.CFGFast()
-        handle_connection = CFG.kb.functions['handle_connection']
-        state = p.factory.entry_state(addr=handle_connection.addr)
+        handle_connection = p.loader.main_object.get_symbol('handle_connection')
+        state = p.factory.entry_state(addr=handle_connection.rebased_addr)
     else:
         arg = claripy.BVS("arg1", 300 * 8)
         argv.append(arg)
