@@ -25,7 +25,7 @@ workon zeratool
 sudo gem install one_gadget
 
 #Need to port to latest angr
-pip install angr==7.8.2.21 ropper r2pipe IPython
+pip install angr==7.8.2.21 cffi==1.7.0 future==0.16.0 pycparser==2.18  IPython==5.0 r2pipe psutil timeout_decorator pwn
 
 git clone https://github.com/radare/radare2.git
 
