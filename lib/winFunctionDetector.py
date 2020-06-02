@@ -1,7 +1,6 @@
 from __future__ import print_function
 import r2pipe
 import json
-import base64
 
 def getWinFunctions(binary_name):
 
@@ -31,8 +30,7 @@ def getWinFunctions(binary_name):
     strings = [string for string in json.loads(r2.cmd('izj'))]
     for string in strings:
         value = string['string']
-        decoded_value = base64.b64decode(value)
-        if any([x in decoded_value for x in known_flag_names]):
+        if any([x in value for x in known_flag_names]):
             address = string['vaddr']
 
             #Get XREFs
