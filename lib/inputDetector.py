@@ -7,6 +7,8 @@ libpwnable = "LIBPWNABLE"
 
 def checkInputType(binary_name):
 
+    print("[+] Checking input type")
+
     #Check for libpwnableharness
     p = angr.Project(binary_name)
     if any(['libpwnable' in str(x.binary) for x in p.loader.all_elf_objects]):
