@@ -17,6 +17,8 @@ def checkOverflow(binary_name,inputType="STDIN"):
     p.hook_symbol('rand',hookFour)
     p.hook_symbol('srand',hookFour)
 
+    hook_functions(p)
+
     #Setup state based on input type
     argv = [binary_name]
     if inputType == "STDIN":
@@ -155,3 +157,14 @@ def checkOverflow(binary_name,inputType="STDIN"):
         print("[+] Triggerable with arg : {}".format(arg_str))
 
     return run_environ
+
+def hook_functions(p):
+    if p.loader.find_symbol("gets") != None:
+        class gets(angr.SimProcedure):
+            def run(self, dst):
+                simfd = self.state.posix.files[0]
+                if simfd is None:
+                    return -1
+                return simfd.read(dst, 2**10)
+                
+        p.hook_symbol("gets", gets())
