@@ -1,7 +1,7 @@
 from __future__ import print_function
 import argparse
 import logging
-logging.disable(logging.CRITICAL)
+#logging.disable(logging.CRITICAL)
 from lib import formatDetector
 from lib import formatLeak
 from lib import inputDetector

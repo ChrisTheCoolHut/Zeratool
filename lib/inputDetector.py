@@ -19,7 +19,7 @@ def checkInputType(binary_name):
     #Functions which MIGHT grab from STDIN
     reading_functions = ['fgets','gets','scanf','read']
 #    binary_functions = [str(x[1].name) for x in CFG.kb.functions.items()]
-    binary_functions = p.loader.main_object.imports.keys()
+    binary_functions = list(p.loader.main_object.imports.keys())
 
     #Match reading functions against local functions
     if any([x in reading_functions for x in binary_functions]):

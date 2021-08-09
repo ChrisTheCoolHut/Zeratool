@@ -1,4 +1,4 @@
-from __future__ import print_function
+
 import r2pipe
 import json
 
@@ -39,7 +39,7 @@ def getWinFunctions(binary_name):
                 if 'fcn_name' in ref:
                     winFunctions[ref['fcn_name']] = ref
 
-    for k,v in winFunctions.items():
+    for k,v in list(winFunctions.items()):
         print("[+] Found win function {}".format(k))
 
     return winFunctions

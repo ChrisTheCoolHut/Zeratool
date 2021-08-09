@@ -1,12 +1,15 @@
-from __future__ import print_function
+
 import angr
+from angr import sim_options as so
 import claripy
 import time
 import timeout_decorator
 import IPython
+from .simgr_helper import overflow_detect_filter
 
 def checkOverflow(binary_name,inputType="STDIN"):
 
+    extras = {so.REVERSE_MEMORY_NAME_MAP, so.TRACK_ACTION_HISTORY, so.SYMBOL_FILL_UNCONSTRAINED_MEMORY, so.SYMBOL_FILL_UNCONSTRAINED_REGISTERS}
     class hookFour(angr.SimProcedure):
         IS_FUNCTION = True
         def run(self):
@@ -16,117 +19,26 @@ def checkOverflow(binary_name,inputType="STDIN"):
     #Hook rands
     p.hook_symbol('rand',hookFour)
     p.hook_symbol('srand',hookFour)
+    #p.hook_symbol('fgets',angr.SIM_PROCEDURES['libc']['gets']())
 
     #Setup state based on input type
     argv = [binary_name]
+    input_arg = claripy.BVS("input", 300 * 8)
     if inputType == "STDIN":
-        state = p.factory.full_init_state(args=argv)
+        state = p.factory.full_init_state(args=argv, stdin=input_arg)
+        state.globals['user_input'] = input_arg
     elif inputType == "LIBPWNABLE":
         handle_connection = p.loader.main_object.get_symbol('handle_connection')
-        state = p.factory.entry_state(addr=handle_connection.rebased_addr)
+        state = p.factory.entry_state(addr=handle_connection.rebased_addr, stdin=input_arg, add_options=extras)
+        state.globals['user_input'] = input_arg
     else:
-        arg = claripy.BVS("arg1", 300 * 8)
-        argv.append(arg)
+        argv.append(input_arg)
         state = p.factory.full_init_state(args=argv)
-        state.globals['arg'] = arg
+        state.globals['user_input'] = input_arg
 
+    state.libc.buf_symbolic_bytes = 0x100
     state.globals['inputType'] = inputType
-    simgr = p.factory.simgr(state, immutable=False, save_unconstrained=True)
-
-    def overflow_filter(simgr):
-
-        for path in simgr.unconstrained:
-            state = path.state
-
-            eip = state.regs.pc
-            bits = state.arch.bits
-            state_copy = state.copy()
-
-            #Constrain pc to 0x41414141 or 0x41414141414141
-            constraints = []
-            for i in range(bits / 8):
-                curr_byte = eip.get_byte(i)
-                constraint = claripy.And(curr_byte == 0x41)
-                constraints.append(constraint)
-
-            #Check satisfiability
-            if state_copy.se.satisfiable(extra_constraints=constraints):
-                for constraint in constraints:
-                    state_copy.add_constraints(constraint)
-
-                #Check by input
-                if state_copy.globals['inputType'] == "STDIN" or state_copy.globals['inputType'] == "LIBPWNABLE":
-                    stdin_str = str(state_copy.posix.dumps(0).replace('\x00','').replace('\x01',''))
-                    if 'A' in stdin_str:
-
-                        #Constrain EIP to 0x41414141 or 0x4141414141414141
-                        constraints = []
-                        for i in range(bits / 8):
-                            curr_byte = eip.get_byte(i)
-                            constraint = claripy.And(curr_byte == 0x41)
-                            constraints.append(constraint)
-
-                        #Constrain STDIN to printable if we can
-                        if state.se.satisfiable(extra_constraints=constraints):
-                            for constraint in constraints:
-                                state.add_constraints(constraint)
-
-
-                        #Constrain rest of input to be printable
-                        stdin = state.posix.files[0]
-                        constraints = []
-                        #stdin_size = len(stdin.all_bytes())
-                        stdin_size = 300
-                        stdin.length = stdin_size
-                        stdin.seek(0)
-                        stdin_bytes = stdin.all_bytes()
-                        for i in range(stdin_size):
-                            curr_byte = stdin.read_from(1)
-                            constraint = claripy.And(curr_byte > 0x2F, curr_byte < 0x7F)
-                            if state.se.satisfiable(extra_constraints=[constraint]):
-                                constraints.append(constraint)
-    
-                        #Constrain STDIN to printable if we can
-                        if state.se.satisfiable(extra_constraints=constraints):
-                            for constraint in constraints:
-                                state.add_constraints(constraint)
-
-                        #Get the string coming into STDIN
-                        stdin_str = repr(str(state.posix.dumps(0).replace('\x00','').replace('\x01','')))
-                        print("[+] Vulnerable path found {}".format(stdin_str))
-                        state.globals['type'] = "Overflow"
-                        simgr.stashes['found'].append(path)
-                        simgr.stashes['unconstrained'].remove(path)
-
-
-                if state_copy.globals['inputType'] == "ARG":
-                    arg = state.globals['arg']
-                    arg_str = str(state_copy.solver.eval(arg,cast_to=str)).replace('\x00','').replace('\x01','')
-                    if 'A' in arg_str:
-                        constraints = []
-                        for i in range(bits / 8):
-                            curr_byte = eip.get_byte(i)
-                            constraint = claripy.And(curr_byte == 0x41)
-                            constraints.append(constraint)
-
-                        for i in range(arg.length):
-                            curr_byte = arg.read_from(1)
-                            constraint = claripy.And(curr_byte > 0x2F, curr_byte < 0x7F)
-                            if state.se.satisfiable(extra_constraints=[constraint]):
-                                constraints.append(constraint)
-    
-                        #Constrain STDIN to printable if we can
-                        if state.se.satisfiable(extra_constraints=constraints):
-                            for constraint in constraints:
-                                state.add_constraints(constraint)
-                        
-
-                        arg_str = repr(str(state.solver.eval(arg,cast_to=str)).replace('\x00','').replace('\x01',''))
-                        print("[+] Vulnerable path found {}".format(arg_str))
-                        state.globals['type'] = "Overflow"
-                        simgr.stashes['found'].append(path)
-                        simgr.stashes['unconstrained'].remove(path)
-        return simgr
+    simgr = p.factory.simgr(state, save_unconstrained=True)
 
     run_environ = {}
     run_environ['type'] = None
@@ -135,7 +47,7 @@ def checkOverflow(binary_name,inputType="STDIN"):
     try:
         @timeout_decorator.timeout(120)
         def exploreBinary(simgr):
-            simgr.explore(find=lambda s: 'type' in s.globals,step_func=overflow_filter)
+            simgr.explore(find=lambda s: 'type' in s.globals,step_func=overflow_detect_filter)
 
         exploreBinary(simgr)
         if 'found' in simgr.stashes and len(simgr.found):
@@ -145,13 +57,8 @@ def checkOverflow(binary_name,inputType="STDIN"):
 
     except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
         print("[~] Keyboard Interrupt")
-    if (inputType == "STDIN" or inputType == "LIBPWNABLE")and end_state is not None:
-        stdin_str = repr(str(end_state.posix.dumps(0).replace('\x00','').replace('\x01','')))
-        run_environ['input'] = stdin_str
-        print("[+] Triggerable with STDIN : {}".format(stdin_str))
-    elif inputType == "ARG" and end_state is not None:
-        arg_str = repr(str(end_state.solver.eval(arg,cast_to=str)).replace('\x00','').replace('\x01',''))
-        run_environ['input'] = arg_str
-        print("[+] Triggerable with arg : {}".format(arg_str))
+
+    run_environ['input'] = end_state.globals['input']
+    print("[+] Triggerable with input : {}".format(end_state.globals['input']))
 
     return run_environ
