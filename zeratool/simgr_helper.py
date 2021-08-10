@@ -1,6 +1,6 @@
 import claripy
 from .radare_helper import findShellcode
-from pwn import *
+#from pwn import *
 
 is_printable = False
 

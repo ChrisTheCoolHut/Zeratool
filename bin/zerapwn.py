@@ -3,15 +3,15 @@ from __future__ import print_function
 import argparse
 import logging
 #logging.disable(logging.CRITICAL)
-from lib import formatDetector
-from lib import formatLeak
-from lib import inputDetector
-from lib import overflowDetector
-from lib import overflowExploiter
-from lib import overflowExploitSender
-from lib import protectionDetector
-from lib import winFunctionDetector
-from lib import formatExploiter
+from zeratool import formatDetector
+from zeratool import formatLeak
+from zeratool import inputDetector
+from zeratool import overflowDetector
+from zeratool import overflowExploiter
+from zeratool import overflowExploitSender
+from zeratool import protectionDetector
+from zeratool import winFunctionDetector
+from zeratool import formatExploiter
 
 logging.getLogger().disabled = True
 def main():
