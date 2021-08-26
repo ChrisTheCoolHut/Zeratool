@@ -31,10 +31,10 @@ def findShellcode(filename, endAddr, shellcode, commandInput):
     with open("command.input", "wb") as f:
         f.write(commandInput)
     with open("temp.rr2", "w") as f:
-        f.write(
-            "program={}\nstdin=command.input\nenvfile={}\n".format(filename, "temp.env")
-        )
-    #        f.write("program={}\nstdin=command.input\nclearenv=true\nenvfile={}\n".format(abs_path,"temp.env"))
+        # f.write(
+        #     "program={}\nstdin=command.input\nenvfile={}\n".format(filename, "temp.env")
+        # )
+            f.write("program={}\nstdin=command.input\nclearenv=true\nenvfile={}\n".format(abs_path,"temp.env"))
 
     r2 = r2pipe.open(filename)
     r2.cmd("e dbg.profile = temp.rr2")

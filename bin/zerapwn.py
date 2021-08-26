@@ -2,6 +2,7 @@
 from __future__ import print_function
 import argparse
 import logging
+import os
 
 # logging.disable(logging.CRITICAL)
 from zeratool import formatDetector
@@ -33,6 +34,11 @@ def main():
         exit(1)
     if args.verbose:
         logging.disable(logging.CRITICAL)
+
+    # For stack problems where env gets shifted
+    # based on path, using the abs path everywhere
+    # makes it consistent
+    args.file = os.path.abspath(args.file)
 
     # Detect problem type
     properties = {}

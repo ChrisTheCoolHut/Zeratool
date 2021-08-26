@@ -1,7 +1,6 @@
 import claripy
 from .radare_helper import findShellcode
-
-# from pwn import *
+from pwn import *
 
 is_printable = False
 
@@ -199,6 +198,8 @@ def point_to_shellcode_filter(simgr):
                     print(
                         "[-] Unable to encode shellcode to avoid {}".format(avoidList)
                     )
+                except TypeError as e:
+                    raise("Pwntools encoders not ported to python3. Can't encode shellcode to avoid bad byte")
                 break
 
         # addresses = [x for x in find_symbolic_buffer(state,len(shellcode))]
@@ -236,7 +237,7 @@ def point_to_shellcode_filter(simgr):
                 #     state.history.bbl_addrs[-1], shellcode, input_bytes)
 
                 # print("Got r2 address : {}".format(hex(r2_address['offset'])))
-                print("vs {}".format(hex(address)))
+                # print("vs {}".format(hex(address)))
 
                 # r2_constraint = claripy.And(memory == shellcode_bvv, state.regs.pc == r2_address)
                 # r2_input_bytes = state.solver.eval(user_input, \
