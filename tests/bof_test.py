@@ -5,6 +5,7 @@ from zeratool import overflowDetector
 from zeratool import overflowExploiter
 from zeratool import overflowExploitSender
 from zeratool import winFunctionDetector
+from zeratool import protectionDetector
 
 
 def test_detect_32():
@@ -54,6 +55,43 @@ def test_pwn_win_func_64():
     )
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
+
+def test_pwn_win_sc_32():
+    # Setup for test
+    test_file = "tests/bof_32"
+    input_type = "STDIN"
+    properties = {"pwn_type": {}}
+
+    # No win function allowed
+    properties["win_functions"] = None
+
+    # Protections trigger exploit find type
+    properties["protections"] = protectionDetector.getProperties(test_file)
+    assert properties["protections"]["nx"] == False
+
+    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+        test_file, properties, inputType=input_type
+    )
+    assert properties["pwn_type"]["results"]["type"] == "Overflow"
+
+
+def test_pwn_win_sc_64():
+    # Setup for test
+    test_file = "tests/bof_64"
+    input_type = "STDIN"
+    properties = {"pwn_type": {}}
+
+    # No win function allowed
+    properties["win_functions"] = None
+
+    # Protections trigger exploit find type
+    properties["protections"] = protectionDetector.getProperties(test_file)
+    assert properties["protections"]["nx"] == False
+
+    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+        test_file, properties, inputType=input_type
+    )
+    assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
 def test_send_exploit():
     test_file = "tests/bof_win_64"

