@@ -62,7 +62,8 @@ def checkFormat(binary_name, inputType="STDIN"):
     except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
         print("[~] Format check timed out")
 
-    run_environ["input"] = end_state.globals["input"]
-    print("[+] Triggerable with input : {}".format(end_state.globals["input"]))
+    if "input" in end_state.globals.keys():
+        run_environ["input"] = end_state.globals["input"]
+        print("[+] Triggerable with input : {}".format(end_state.globals["input"]))
 
     return run_environ
