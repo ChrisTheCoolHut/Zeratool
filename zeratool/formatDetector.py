@@ -2,162 +2,43 @@ import angr
 import claripy
 import time
 import timeout_decorator
-import IPython
-
-try:
-    xrange  # Python 2
-except NameError:
-    xrange = range  # Python 3
-
-
-"""
-Model either printf("User input") or printf("%s","Userinput")
-"""
-
-
-class printFormat(angr.procedures.libc.printf.printf):
-    IS_FUNCTION = True
-    """
-    Checks up to two args
-    """
-
-    def checkExploitable(self):
-
-        """
-        For each value passed to printf
-        Check to see if there are any symbolic bytes
-        Passed in that we control
-        """
-        for i in range(5):
-            state_copy = self.state.copy()
-
-            solv = state_copy.solver.eval
-
-            printf_arg = self.arg(i)
-
-            var_loc = solv(printf_arg)
-
-            var_value = state_copy.memory.load(var_loc)
-
-            var_value_length = int("0x" + str(var_value.length), 16)
-
-            symbolic_list = [
-                state_copy.memory.load(var_loc + x).get_byte(0).symbolic
-                for x in range(var_value_length)
-            ]
-
-            """
-            Iterate over the characters in the string
-            Checking for where our symbolic values are
-            This helps in weird cases like:
-
-            char myVal[100] = "I\'m cool ";
-            strcat(myVal,STDIN);
-            printf("My super cool string is %s",myVal);
-            """
-            position = 0
-            count = 0
-            greatest_count = 0
-            prev_item = symbolic_list[0]
-            for i in range(1, len(symbolic_list)):
-                if symbolic_list[i] and symbolic_list[i] == symbolic_list[i - 1]:
-                    count = count + 1
-                    if count > greatest_count:
-                        greatest_count = count
-                        position = i - count
-                else:
-                    if count > greatest_count:
-                        greatest_count = count
-                        position = i - 1 - count
-                        # previous position minus greatest count
-                    count = 0
-            print(
-                "[+] Found symbolic buffer at position {} of length {}".format(
-                    position, greatest_count
-                )
-            )
-
-            if greatest_count > 0:
-                str_val = "%x_"
-                self.constrainBytes(
-                    state_copy,
-                    var_value,
-                    var_loc,
-                    position,
-                    var_value_length,
-                    strVal=str_val,
-                )
-                vuln_string = solv(var_value, cast_to=bytes)
-
-                # Verify solution
-                if (
-                    state_copy.globals["inputType"] == "STDIN"
-                    or state_copy.globals["inputType"] == "LIBPWNABLE"
-                ):
-                    stdin_str = str(state_copy.posix.dumps(0))
-                    if str_val in stdin_str:
-                        var_value = self.state.memory.load(var_loc)
-                        self.constrainBytes(
-                            self.state, var_value, var_loc, position, var_value_length
-                        )
-                        print("[+] Vulnerable path found {}".format(vuln_string))
-                        self.state.globals["type"] = "Format"
-                        self.state.globals["position"] = position
-                        self.state.globals["length"] = greatest_count
-
-                        return True
-                if state_copy.globals["inputType"] == "ARG":
-                    arg = state_copy.globals["arg"]
-                    arg_str = str(state_copy.solver.eval(arg, cast_to=bytes))
-                    if str_val in arg_str:
-                        var_value = self.state.memory.load(var_loc)
-                        self.constrainBytes(
-                            self.state, var_value, var_loc, position, var_value_length
-                        )
-                        print("[+] Vulnerable path found {}".format(vuln_string))
-                        self.state.globals["type"] = "Format"
-                        self.state.globals["position"] = position
-                        self.state.globals["length"] = greatest_count
-                        return True
-
-        return False
-
-    def constrainBytes(self, state, symVar, loc, position, length, strVal="%x_"):
-        for i in range(length):
-            strValIndex = i % len(strVal)
-            curr_byte = self.state.memory.load(loc + i).get_byte(0)
-            constraint = state.se.And(strVal[strValIndex] == curr_byte)
-            if state.se.satisfiable(extra_constraints=[constraint]):
-                state.add_constraints(constraint)
-            else:
-                print(
-                    "[~] Byte {} not constrained to {}".format(i, strVal[strValIndex])
-                )
-
-    def run(self):
-        if not self.checkExploitable():
-            return super(type(self), self).run()
-
+import tqdm
+from zeratool import printf_model
 
 def checkFormat(binary_name, inputType="STDIN"):
 
     p = angr.Project(binary_name, load_options={"auto_load_libs": False})
 
-    p.hook_symbol("printf", printFormat())
+    # Stdio based ones
+    p.hook_symbol("printf", printf_model.printFormat(0))
+    p.hook_symbol("fprintf", printf_model.printFormat(1))
+    p.hook_symbol("dprintf", printf_model.printFormat(1))
+    p.hook_symbol("sprintf", printf_model.printFormat(1))
+    p.hook_symbol("snprintf", printf_model.printFormat(2))
+
+    # Stdarg base ones
+    p.hook_symbol("vprintf", printf_model.printFormat(0))
+    p.hook_symbol("vfprintf", printf_model.printFormat(1))
+    p.hook_symbol("vdprintf", printf_model.printFormat(1))
+    p.hook_symbol("vsprintf", printf_model.printFormat(1))
+    p.hook_symbol("vsnprintf", printf_model.printFormat(2))
 
     # Setup state based on input type
     argv = [binary_name]
+    input_arg = claripy.BVS("input", 300 * 8)
     if inputType == "STDIN":
-        state = p.factory.full_init_state(args=argv)
+        state = p.factory.full_init_state(args=argv, stdin=input_arg)
+        state.globals["user_input"] = input_arg
     elif inputType == "LIBPWNABLE":
         handle_connection = p.loader.main_object.get_symbol("handle_connection")
         state = p.factory.entry_state(addr=handle_connection.rebased_addr)
+        state.globals["user_input"] = input_arg
     else:
-        arg = claripy.BVS("arg1", 300 * 8)
-        argv.append(arg)
+        argv.append(input_arg)
         state = p.factory.full_init_state(args=argv)
-        state.globals["arg"] = arg
+        state.globals["user_input"] = input_arg
 
+    state.libc.buf_symbolic_bytes = 0x100
     state.globals["inputType"] = inputType
     simgr = p.factory.simgr(state, save_unconstrained=True)
 
@@ -180,13 +61,8 @@ def checkFormat(binary_name, inputType="STDIN"):
 
     except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
         print("[~] Format check timed out")
-    if (inputType == "STDIN" or inputType == "LIBPWNABLE") and end_state is not None:
-        stdin_str = str(end_state.posix.dumps(0))
-        print("[+] Triggerable with STDIN : {}".format(stdin_str))
-        run_environ["input"] = stdin_str
-    elif inputType == "ARG" and end_state is not None:
-        arg_str = str(end_state.solver.eval(arg, cast_to=bytes))
-        run_environ["input"] = arg_str
-        print("[+] Triggerable with arg : {}".format(arg_str))
+
+    run_environ["input"] = end_state.globals["input"]
+    print("[+] Triggerable with input : {}".format(end_state.globals["input"]))
 
     return run_environ

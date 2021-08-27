@@ -9,27 +9,27 @@ from zeratool import protectionDetector
 
 
 def test_detect_32():
-    test_file = "tests/bof_win_32"
+    test_file = "tests/bin/bof_win_32"
     input_type = "STDIN"
     pwn_type = overflowDetector.checkOverflow(test_file, inputType=input_type)
     assert pwn_type["type"] == "Overflow"
 
 
 def test_detect_64():
-    test_file = "tests/bof_win_64"
+    test_file = "tests/bin/bof_win_64"
     input_type = "STDIN"
     pwn_type = overflowDetector.checkOverflow(test_file, inputType=input_type)
     assert pwn_type["type"] == "Overflow"
 
 
 def test_get_win_func():
-    test_file = "tests/bof_win_32"
+    test_file = "tests/bin/bof_win_32"
     win_functions = winFunctionDetector.getWinFunctions(test_file)
     assert "sym.print_flag" in win_functions
 
 
 def test_pwn_win_func_32():
-    test_file = "tests/bof_win_32"
+    test_file = "tests/bin/bof_win_32"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
 
@@ -43,7 +43,7 @@ def test_pwn_win_func_32():
 
 
 def test_pwn_win_func_64():
-    test_file = "tests/bof_win_64"
+    test_file = "tests/bin/bof_win_64"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
 
@@ -58,7 +58,7 @@ def test_pwn_win_func_64():
 
 def test_pwn_win_sc_32():
     # Setup for test
-    test_file = "tests/bof_32"
+    test_file = "tests/bin/bof_32"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
 
@@ -77,7 +77,7 @@ def test_pwn_win_sc_32():
 
 def test_pwn_win_sc_64():
     # Setup for test
-    test_file = "tests/bof_64"
+    test_file = "tests/bin/bof_64"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
 
@@ -94,7 +94,7 @@ def test_pwn_win_sc_64():
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
 def test_send_exploit():
-    test_file = "tests/bof_win_64"
+    test_file = "tests/bin/bof_win_64"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
 

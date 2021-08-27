@@ -18,7 +18,8 @@ setuptools.setup(
      "IPython",
      "timeout_decorator",
      "pwntools",
-     "tox"
+     "tox",
+     "tqdm",
      ],
 
  )
