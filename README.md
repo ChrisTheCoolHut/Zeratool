@@ -79,6 +79,11 @@ Tox and Pytest are used to verify that Zeratool is working correctly.
 tox .
 ```
 
+## Run the tests!
+Tox and Pytest are used to verify that Zeratool is working correctly.
+
+    tox .
+
 ## FAQ
 Q. Why doesn't Zeratool work against my simple exploitable?
 
