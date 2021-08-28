@@ -3,7 +3,7 @@ import setuptools
 
 setuptools.setup(
      name='zeratool',  
-     version='1',
+     version='2.0',
      scripts=['bin/zerapwn.py'] ,
      author="Christoppher Roberts",
      author_email="",
