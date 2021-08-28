@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "[~~~] This install script is deprecated. Please use pip install method instead"
 sudo apt-get install python-pip python-dev build-essential rubygems-integration ruby-dev rubygems python-dev libffi-dev -y
 #Ubuntu 12 -> rubygems
 #Ubuntu 14 -> rubygems-integration
