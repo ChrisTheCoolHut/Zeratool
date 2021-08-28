@@ -73,6 +73,11 @@ zerapwn.py tests/bin/bof_32
 zerapwn.py tests/bin/bof_64
 zerapwn.py challenges/demo_bin # is slow
 ```
+## Run the tests!
+Tox and Pytest are used to verify that Zeratool is working correctly.
+```
+tox .
+```
 
 ## FAQ
 Q. Why doesn't Zeratool work against my simple exploitable?
