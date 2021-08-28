@@ -1,4 +1,7 @@
 from pwn import *
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def getProperties(binary_name):

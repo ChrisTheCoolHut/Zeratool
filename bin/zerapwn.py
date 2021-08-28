@@ -5,7 +5,6 @@ import argparse
 import logging
 import os
 
-#logging.disable(logging.CRITICAL)
 from zeratool import formatDetector
 from zeratool import formatLeak
 from zeratool import inputDetector
@@ -16,15 +15,30 @@ from zeratool import protectionDetector
 from zeratool import winFunctionDetector
 from zeratool import formatExploiter
 
-logging.getLogger().disabled = True
+logging.basicConfig()
+logging.root.setLevel(logging.INFO)
+
+loud_loggers = [
+    "angr.engines",
+    "angr.sim_manager",
+    "angr.simos",
+    "angr.project",
+    "angr.procedures",
+    "cle",
+    "angr.storage",
+]
+
+log = logging.getLogger(__name__)
+
 
 def is_radare_installed():
     return which("r2") is not None
 
+
 def main():
 
     if not is_radare_installed():
-        print("[-] Error radare2 is not installed.")
+        log.info("[-] Error radare2 is not installed.")
         exit(1)
 
     parser = argparse.ArgumentParser()
@@ -35,13 +49,37 @@ def main():
     parser.add_argument(
         "-v", "--verbose", help="Verbose mode", action="store_true", default=False
     )
+    parser.add_argument(
+        "--force_shellcode",
+        default=False,
+        action="store_true",
+        help="Set overflow pwn mode to point to shellcode",
+    )
+
+    parser.add_argument(
+        "--format_only",
+        default=False,
+        action="store_true",
+        help="Only run format strings check",
+    )
+    parser.add_argument(
+        "--overflow_only",
+        default=False,
+        action="store_true",
+        help="Only run overflow check",
+    )
 
     args = parser.parse_args()
     if args.file is None:
-        print("[-] Exitting no file specified")
+        log.info("[-] Exitting no file specified")
         exit(1)
     if args.verbose:
-        logging.disable(logging.CRITICAL)
+        logging.basicConfig(level=logging.DEBUG)
+    if not args.verbose:
+        for loud_logger in loud_loggers:
+            logging.getLogger(loud_logger).setLevel(logging.ERROR)
+
+            logging.getLogger("angr.project").disabled = True
 
     # For stack problems where env gets shifted
     # based on path, using the abs path everywhere
@@ -53,29 +91,34 @@ def main():
     properties["input_type"] = inputDetector.checkInputType(args.file)
     properties["libc"] = args.libc
     properties["file"] = args.file
-    print("[+] Checking pwn type...")
-    print("[+] Checking for overflow pwn type...")
-    properties["pwn_type"] = overflowDetector.checkOverflow(
-        args.file, inputType=properties["input_type"]
-    )
-    if properties["pwn_type"]["type"] is None:
-        print("[+] Checking for format string pwn type...")
-        properties["pwn_type"] = formatDetector.checkFormat(
+    properties["force_shellcode"] = args.force_shellcode
+    properties["pwn_type"] = {}
+    properties["pwn_type"]["type"] = None
+    log.info("[+] Checking pwn type...")
+    if not args.format_only:
+        log.info("[+] Checking for overflow pwn type...")
+        properties["pwn_type"] = overflowDetector.checkOverflow(
             args.file, inputType=properties["input_type"]
         )
+    if not args.overflow_only:
+        if properties["pwn_type"]["type"] is None:
+            log.info("[+] Checking for format string pwn type...")
+            properties["pwn_type"] = formatDetector.checkFormat(
+                args.file, inputType=properties["input_type"]
+            )
 
     # Get problem mitigations
-    print("[+] Getting binary protections")
+    log.info("[+] Getting binary protections")
     properties["protections"] = protectionDetector.getProperties(args.file)
 
     # Is it a leak based one?
     if properties["pwn_type"]["type"] == "Format":
-        print("[+] Checking for flag leak")
+        log.info("[+] Checking for flag leak")
         properties["pwn"] = formatLeak.checkLeak(args.file, properties)
         # Launch leak remotely
         if properties["pwn"]["flag_found"] and args.url != "":
-            print("[+] Found flag through leaks locally. Launching remote exploit")
-            print("[+] Connecting to {}:{}".format(args.url, args.port))
+            log.info("[+] Found flag through leaks locally. Launching remote exploit")
+            log.info("[+] Connecting to {}:{}".format(args.url, args.port))
             properties["pwn"]["exploit"] = formatLeak.checkLeak(
                 args.file,
                 properties,
@@ -91,11 +134,12 @@ def main():
 
     # Exploit overflows
     if properties["pwn_type"]["type"] == "Overflow":
-        print("[+] Exploiting overflow")
+        log.info("[+] Exploiting overflow")
+        properties["pwn_type"]["results"] = {}
         properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
             args.file, properties, inputType=properties["input_type"]
         )
-        if properties["pwn_type"]["results"]["input"]:
+        if properties["pwn_type"]["results"]["type"]:
             properties["send_results"] = overflowExploitSender.sendExploit(
                 args.file, properties
             )
@@ -122,7 +166,7 @@ def main():
                 properties, remote_url=args.url, remote_port=int(args.port)
             )
     else:
-        print("[-] Can not determine vulnerable type")
+        log.info("[-] Can not determine vulnerable type")
 
 
 if __name__ == "__main__":
