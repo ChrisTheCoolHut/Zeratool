@@ -6,16 +6,16 @@ This tool uses [angr](https://github.com/angr/angr) to concolically analyze bina
 [![asciicast](https://asciinema.org/a/188002.png)](https://asciinema.org/a/188002)
 
 ## Installing
-Zeratool has been tested on Ubuntu 16.04 and the install script is setup for Ubuntu 12.04 to Ubuntu 18.04
+Zeratool has been tested on Ubuntu 16.04 and 18.04. Please install [radare2](https://github.com/radareorg/radare2) first
 
-    ./install.sh
+    pip install zeratool
     
 ## Usage
 Zeratool is a python script which accept a binary as an argument and optionally a linked libc library, and a CTF Server connection information
 
 ```
-[chris:~/Zeratool] [angr] python zeratool.py -h
-usage: zeratool.py [-h] [-l LIBC] [-u URL] [-p PORT] [-v] file
+[chris:~/Zeratool] [angr] zerapwn.py -h
+usage: zerapwn.py [-h] [-l LIBC] [-u URL] [-p PORT] [-v] file
 
 positional arguments:
   file                  File to analyze
@@ -51,24 +51,27 @@ Checkout the samples.sh file. The file contains several examples of Zeratool aut
 ```
 #!/bin/bash
 #Buffer Overflows with win functions
-python zeratool.py challenges/ret -u ctf.hackucf.org -p 9003
-python zeratool.py challenges/bof3 -u ctf.hackucf.org -p 9002
-python zeratool.py challenges/bof2 -u ctf.hackucf.org -p 9001
-python zeratool.py challenges/bof1 -u ctf.hackucf.org -p 9000
+zerapwn.py challenges/ret -u ctf.hackucf.org -p 9003
+zerapwn.py challenges/bof3 -u ctf.hackucf.org -p 9002
+zerapwn.py challenges/bof2 -u ctf.hackucf.org -p 9001
+zerapwn.py challenges/bof1 -u ctf.hackucf.org -p 9000
 
 #Down for the summer
-#python zeratool.py challenges/easy_format -u tctf.competitivecyber.club -p 7801
-#python zeratool.py challenges/medium_format -u tctf.competitivecyber.club -p 7802
+#python zerapwn.py challenges/easy_format -u tctf.competitivecyber.club -p 7801
+#python zerapwn.py challenges/medium_format -u tctf.competitivecyber.club -p 7802
 
 #Format string leak
-python zeratool.py challenges/easy_format
+zerapwn.py tests/bin/read_stack_32
+zerapwn.py tests/bin/read_stack_64
 #Format string point to win function
-python zeratool.py challenges/medium_format
+zerapwn.py challenges/medium_format
 #Format string point to shellcode
-python zeratool.py challenges/hard_format #This one sometimes needs to be run twice
+#zerapwn.py challenges/hard_format #This one sometimes needs to be run twice
 
 #Buffer overflow point to shellcode
-python zeratool.py challenges/demo_bin
+zerapwn.py tests/bin/bof_32
+zerapwn.py tests/bin/bof_64
+zerapwn.py challenges/demo_bin # is slow
 ```
 
 ## FAQ
