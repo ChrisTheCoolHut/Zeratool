@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 from __future__ import print_function
+from shutil import which
 import argparse
 import logging
 import os
 
-# logging.disable(logging.CRITICAL)
+#logging.disable(logging.CRITICAL)
 from zeratool import formatDetector
 from zeratool import formatLeak
 from zeratool import inputDetector
@@ -17,8 +18,15 @@ from zeratool import formatExploiter
 
 logging.getLogger().disabled = True
 
+def is_radare_installed():
+    return which("r2") is not None
 
 def main():
+
+    if not is_radare_installed():
+        print("[-] Error radare2 is not installed.")
+        exit(1)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("file", help="File to analyze")
     parser.add_argument("-l", "--libc", help="libc to use")
