@@ -13,14 +13,15 @@
 
 #ifdef MEDIUM
 /*
- * Test for point to shellcode
+ * Test for point to win
  */
 void secret_function(void) {
     char key[50] = {0};
     FILE *pFile = NULL;
     pFile = fopen(FLAG_NAME, "r");
     fread(key, sizeof(key), 1, pFile);
-    printf("The key is %s\n", key);
+    printf("The flag is %s\n", key);
+    system("cat flag.txt");
 }
 #endif
 

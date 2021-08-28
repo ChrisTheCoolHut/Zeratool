@@ -5,12 +5,23 @@ import os
 
 def getRegValues(filename, endAddr):
 
-    r2 = r2pipe.open(filename)
-    r2.cmd("doo")
-    r2.cmd("dcu {}".format(endAddr))
+    r2 = r2pipe.open(filename,flags=["-d"])
+    #r2.cmd("doo")
+    r2.cmd("e dbg.bep=entry")
+    entry_addr = json.loads(r2.cmd("iej"))[0]["vaddr"] 
+    r2.cmd("dcu {}".format(entry_addr))
     regs = json.loads(r2.cmd("drj"))
     r2.quit()
     return regs
+
+
+def get_base_addr(filename):
+
+    r2 = r2pipe.open(filename)
+    r2.cmd("doo")
+    base_addr = json.loads(r2.cmd("iMj"))["vaddr"]
+    r2.quit()
+    return base_addr
 
 
 """

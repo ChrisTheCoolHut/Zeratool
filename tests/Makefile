@@ -1,6 +1,7 @@
 
 build_flags := -fno-stack-protector -z execstack \
-	-Wno-implicit-function-declaration -no-pie
+	-Wno-implicit-function-declaration -no-pie \
+	-Wno-format-security
 bin_names := bof_32 bof_64 bof_win_32 bof_win_64 \
 	read_stack_32 format_pc_write_32 format_write_and_constrain_32 \
 	read_stack_64 format_pc_write_64 format_write_and_constrain_64 \
@@ -16,19 +17,19 @@ build_bof:
 
 build_format_32:
 	gcc -O0 -m32 -fno-stack-protector -o bin/read_stack_32 \
-		format_string.c -DEASY -Wno-format-security
+		format_string.c -DEASY $(build_flags)
 	gcc -O0 -m32 -fno-stack-protector -o bin/format_pc_write_32 \
-		format_string.c -DMEDIUM -Wno-format-security
+		format_string.c -DMEDIUM $(build_flags)
 	gcc -O0 -m32 -fno-stack-protector -o bin/format_write_and_constrain_32 \
-		format_string.c -DHARD -Wno-format-security
+		format_string.c -DHARD $(build_flags)
 
 build_format_64:
 	gcc -O0 -fno-stack-protector -o bin/read_stack_64 \
-		format_string.c -DEASY -Wno-format-security
+		format_string.c -DEASY $(build_flags)
 	gcc -O0 -fno-stack-protector -o bin/format_pc_write_64 \
-		format_string.c -DMEDIUM -Wno-format-security
+		format_string.c -DMEDIUM $(build_flags)
 	gcc -O0 -fno-stack-protector -o bin/format_write_and_constrain_64 \
-		format_string.c -DHARD -Wno-format-security
+		format_string.c -DHARD $(build_flags)
 
 build_flag:
 	echo "flag{y0u_g0t_1t}" > flag.txt
@@ -36,4 +37,3 @@ build_flag:
 
 clean:
 	rm -rf bin/*
-	rm $(bin_names)
