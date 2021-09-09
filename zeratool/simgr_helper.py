@@ -60,11 +60,6 @@ def get_rop_chain(properties):
     ret_symbol = None
     ret_string = None
 
-    # Make this function compatible with 32bit and 64bit
-    pack = p32
-    if "64" in properties["protections"]["arch"]:
-        pack = p64
-
     # Find the function we want to call
     if "system" in elf.symbols:
         ret_symbol = elf.symbols["system"]
