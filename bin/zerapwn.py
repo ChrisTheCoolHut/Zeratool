@@ -5,7 +5,7 @@ import argparse
 import logging
 import os
 
-#logging.disable(logging.CRITICAL)
+logging.disable(logging.CRITICAL)
 from zeratool import formatDetector
 from zeratool import formatLeak
 from zeratool import inputDetector

