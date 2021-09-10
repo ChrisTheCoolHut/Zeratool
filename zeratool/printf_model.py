@@ -2,6 +2,7 @@ from pwn import *
 import angr
 import claripy
 import tqdm
+from .simgr_helper import get_trimmed_input
 
 # Better symbolic strlen
 def get_max_strlen(state, value):
@@ -158,3 +159,134 @@ class printFormat(angr.procedures.libc.printf.printf):
     def run(self):
         if not self.checkExploitable():
             return super(type(self), self).run()
+
+
+class printf_leak_detect(angr.procedures.libc.printf.printf):
+    IS_FUNCTION = True
+    format_index = 0
+    expected_args = 0
+    """
+    Checks userinput arg
+    """
+
+    def __init__(self,format_index):
+        # Set user input index for different
+        # printf types
+        self.format_index=format_index
+        angr.procedures.libc.printf.printf.__init__(self)
+
+    def get_expected_args(self):
+
+        strlen = angr.SIM_PROCEDURES['libc']['strlen']
+        format_string_arg = self.arg(self.format_index)
+
+        # Sanity check, if this happens, then we have
+        # a format string bug likely
+        if self.state.solver.symbolic(format_string_arg):
+            print("printf arg ptr is symbolic! HOW?".format(i))
+
+        format_string_addr = self.state.solver.eval(format_string_arg)
+        length = self.inline_call(strlen, format_string_arg).ret_expr
+        format_string = self.state.memory.load(format_string_addr, length)
+
+        format_string_bytes = self.state.solver.eval(format_string, cast_to=bytes)
+
+        print("Found format string {}".format(format_string_bytes))
+
+        return format_string_bytes.count(b"%")
+
+    def check_for_leak(self):
+
+        bits = self.state.arch.bits
+        load_len = int(bits / 8)
+        max_read_len = 1024
+        """
+        For each value passed to printf
+        Check to see if there are any symbolic bytes
+        Passed in that we control
+        """
+        state = self.state
+        p = self.state.project
+        elf = ELF(state.project.filename)
+
+        for i in range(self.format_index,self.format_index + self.expected_args + 1):
+
+            printf_arg = self.arg(i)
+
+            # Sanity check
+            if self.state.solver.symbolic(printf_arg):
+                print("printf arg ptr is symbolic! HOW?".format(i))
+
+            var_addr = self.state.solver.eval(printf_arg)
+            print("Checking : {}".format(hex(var_addr)))
+
+            # Are any pointers GOT addresses?
+            for name,addr in elf.got.items():
+                if var_addr == addr:
+                    print("[+] Printf leaked GOT {}".format(name))
+                    state.globals["leaked_type"] = "function"
+                    state.globals["leaked_func"] = name
+                    state.globals["leaked_addr"] = var_addr
+
+                    # Input to leak
+                    user_input = state.globals["user_input"]
+                    input_bytes = state.solver.eval(
+                        user_input, cast_to=bytes
+                    )
+
+                    state.globals["leak_input"] = input_bytes
+                    state.globals["leak_output"] = state.posix.dumps(1)
+                    return True
+
+            # Heap and stack addrs should be in a heap or stack
+            # segment, but angr doesn't map those segments so the
+            # below call will not work
+            #found_obj = p.loader.find_segment_containing(var_addr)
+
+            # Check for stack address leak
+            # So we have a dumb check to see if it's a stack addr
+            stack_ptr = state.solver.eval(state.regs.sp)
+
+            var_addr_mask = var_addr >>28
+            stack_ptr_mask = stack_ptr >>28
+            print("{} vs {}".format(hex(var_addr),hex(stack_ptr)))
+            print("{} vs {}".format(hex(var_addr_mask),hex(stack_ptr_mask)))
+            if var_addr_mask == stack_ptr_mask:
+                print("[+] Leaked a stack addr : {}".format(hex(var_addr)))
+                state.globals["leaked_type"] = "stack_address"
+                state.globals["leaked_addr"] = var_addr
+
+                # Input to leak
+                user_input = state.globals["user_input"]
+                input_bytes = state.solver.eval(
+                    user_input, cast_to=bytes
+                )
+
+                input_bytes = get_trimmed_input(user_input, state)
+
+                state.globals["leak_input"] = input_bytes
+                state.globals["leak_output"] = state.posix.dumps(1)
+
+            # Check tracked malloc addrs
+            if "stored_malloc" in self.state.globals.keys():
+                for addr in self.state.globals["stored_malloc"]:
+                    if addr == var_addr:
+                        print("[+] Leaked a heap addr : {}".format(hex(var_addr)))
+                        state.globals["leaked_type"] = "heap_address"
+                        state.globals["leaked_addr"] = var_addr
+
+                        # Input to leak
+                        user_input = state.globals["user_input"]
+                        input_bytes = state.solver.eval(
+                            user_input, cast_to=bytes
+                        )
+
+                        state.globals["leak_input"] = input_bytes
+                        state.globals["leak_output"] = state.posix.dumps(1)
+
+    def run(self):
+        self.expected_args = self.get_expected_args()
+        self.check_for_leak()
+        return super(type(self), self).run()
+
+            

