@@ -7,24 +7,39 @@ from zeratool import overflowExploitSender
 from zeratool import winFunctionDetector
 from zeratool import protectionDetector
 
+from contextlib import redirect_stdout, redirect_stderr, contextmanager, ExitStack
+
+@contextmanager
+def suppress(out=True, err=False):
+    with ExitStack() as stack:
+        with open(os.devnull, "w") as null:
+            if out:
+                stack.enter_context(redirect_stdout(null))
+            if err:
+                stack.enter_context(redirect_stderr(null))
+            yield
+
 
 def test_detect_32():
-    test_file = "tests/bin/bof_win_32"
-    input_type = "STDIN"
-    pwn_type = overflowDetector.checkOverflow(test_file, inputType=input_type)
+    with suppress():
+        test_file = "tests/bin/bof_win_32"
+        input_type = "STDIN"
+        pwn_type = overflowDetector.checkOverflow(test_file, inputType=input_type)
     assert pwn_type["type"] == "Overflow"
 
 
 def test_detect_64():
-    test_file = "tests/bin/bof_win_64"
-    input_type = "STDIN"
-    pwn_type = overflowDetector.checkOverflow(test_file, inputType=input_type)
+    with suppress():
+        test_file = "tests/bin/bof_win_64"
+        input_type = "STDIN"
+        pwn_type = overflowDetector.checkOverflow(test_file, inputType=input_type)
     assert pwn_type["type"] == "Overflow"
 
 
 def test_get_win_func():
-    test_file = "tests/bin/bof_win_32"
-    win_functions = winFunctionDetector.getWinFunctions(test_file)
+    with suppress():
+        test_file = "tests/bin/bof_win_32"
+        win_functions = winFunctionDetector.getWinFunctions(test_file)
     assert "sym.print_flag" in win_functions
 
 
@@ -32,13 +47,14 @@ def test_pwn_win_func_32():
     test_file = "tests/bin/bof_win_32"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
-
-    properties["win_functions"] = winFunctionDetector.getWinFunctions(test_file)
+    with suppress():
+        properties["win_functions"] = winFunctionDetector.getWinFunctions(test_file)
     assert "sym.print_flag" in properties["win_functions"]
 
-    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
-        test_file, properties, inputType=input_type
-    )
+    with suppress():
+        properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+            test_file, properties, inputType=input_type
+        )
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
 
@@ -46,13 +62,14 @@ def test_pwn_win_func_64():
     test_file = "tests/bin/bof_win_64"
     input_type = "STDIN"
     properties = {"pwn_type": {}}
-
-    properties["win_functions"] = winFunctionDetector.getWinFunctions(test_file)
+    with suppress():
+        properties["win_functions"] = winFunctionDetector.getWinFunctions(test_file)
     assert "sym.print_flag" in properties["win_functions"]
 
-    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
-        test_file, properties, inputType=input_type
-    )
+    with suppress():
+        properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+            test_file, properties, inputType=input_type
+        )
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
 
@@ -64,14 +81,15 @@ def test_pwn_win_sc_32():
 
     # No win function allowed
     properties["win_functions"] = None
-
+    with suppress():
     # Protections trigger exploit find type
-    properties["protections"] = protectionDetector.getProperties(test_file)
+        properties["protections"] = protectionDetector.getProperties(test_file)
     assert properties["protections"]["nx"] == False
 
-    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
-        test_file, properties, inputType=input_type
-    )
+    with suppress():
+        properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+            test_file, properties, inputType=input_type
+        )
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
 
@@ -84,13 +102,15 @@ def test_pwn_win_sc_64():
     # No win function allowed
     properties["win_functions"] = None
 
-    # Protections trigger exploit find type
-    properties["protections"] = protectionDetector.getProperties(test_file)
+    with suppress():
+        # Protections trigger exploit find type
+        properties["protections"] = protectionDetector.getProperties(test_file)
     assert properties["protections"]["nx"] == False
 
-    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
-        test_file, properties, inputType=input_type
-    )
+    with suppress():
+        properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+            test_file, properties, inputType=input_type
+        )
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
 def test_send_exploit():
@@ -98,15 +118,18 @@ def test_send_exploit():
     input_type = "STDIN"
     properties = {"pwn_type": {}}
 
-    properties["win_functions"] = winFunctionDetector.getWinFunctions(test_file)
+    with suppress():
+        properties["win_functions"] = winFunctionDetector.getWinFunctions(test_file)
     assert "sym.print_flag" in properties["win_functions"]
 
-    properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
-        test_file, properties, inputType=input_type
-    )
+    with suppress():
+        properties["pwn_type"]["results"] = overflowExploiter.exploitOverflow(
+            test_file, properties, inputType=input_type
+        )
     assert properties["pwn_type"]["results"]["type"] == "Overflow"
 
-    properties["send_results"] = overflowExploitSender.sendExploit(
-        test_file, properties
-    )
+    with suppress():
+        properties["send_results"] = overflowExploitSender.sendExploit(
+            test_file, properties
+        )
     assert properties["send_results"]["flag_found"] == True
