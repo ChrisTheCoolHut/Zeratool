@@ -13,7 +13,10 @@ def getRegValues(filename, endAddr=None):
         r2.cmd("e dbg.bep=entry")
         entry_addr = json.loads(r2.cmd("iej"))[0]["vaddr"] 
         r2.cmd("dcu {}".format(entry_addr))
-    regs = json.loads(r2.cmd("drj"))
+    # drj command is broken in r2 right now
+    # so use drrj
+    regs = json.loads(r2.cmd("drrj"))
+    regs = dict([(x['reg'],int(x['value'],16)) for x in regs])
     r2.quit()
     return regs
 
