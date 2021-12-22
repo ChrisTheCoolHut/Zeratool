@@ -3,8 +3,8 @@
 #ifdef win_func
 void print_flag()
 {
-    system("cat flag.txt");
     puts("flag{you_did_it}");
+    system("cat flag.txt");
 }
 #endif
 
@@ -14,6 +14,12 @@ int pwn_me()
     printf("Your buffer is at %p\n", my_buf);
     gets(my_buf);
     return 0;
+}
+
+void does_nothing()
+{
+    puts("/bin/sh");
+    execve(NULL,NULL,NULL);
 }
 
 void main()

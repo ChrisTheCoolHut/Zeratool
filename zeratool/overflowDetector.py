@@ -5,6 +5,9 @@ import time
 import timeout_decorator
 import IPython
 from .simgr_helper import overflow_detect_filter
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def checkOverflow(binary_name, inputType="STDIN"):
@@ -67,10 +70,10 @@ def checkOverflow(binary_name, inputType="STDIN"):
             run_environ["type"] = end_state.globals["type"]
 
     except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
-        print("[~] Keyboard Interrupt")
+        log.info("[~] Keyboard Interrupt")
 
     if "input" in run_environ.keys():
         run_environ["input"] = end_state.globals["input"]
-        print("[+] Triggerable with input : {}".format(end_state.globals["input"]))
+        log.info("[+] Triggerable with input : {}".format(end_state.globals["input"]))
 
     return run_environ

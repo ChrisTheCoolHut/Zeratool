@@ -28,9 +28,10 @@ void secret_function(void) {
 int main(int argc, char *argv[])
 {
     int i = 0;
-    char buf[1024];
 
 #ifdef EASY
+    char buf[1024];
+    fgets(buf, 1024, stdin);
     /*
      * Test for stack reading
      */
@@ -45,9 +46,15 @@ int main(int argc, char *argv[])
     fclose(pKey);
 #endif
 
+#ifdef MEDIUM
+    char buf[256];
+    read(0, buf, 256);
+#endif
+    
+#ifdef HARD
+    char buf[1024];
     /* read user input securely */
     fgets(buf, 1024, stdin);
-#ifdef HARD
     /*
      * Test for point to shellcode AND
      * satisfy constraints

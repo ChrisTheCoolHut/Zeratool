@@ -11,6 +11,7 @@ from zeratool import formatExploiter
 
 from contextlib import redirect_stdout, redirect_stderr, contextmanager, ExitStack
 
+
 @contextmanager
 def suppress(out=True, err=False):
     with ExitStack() as stack:
@@ -20,6 +21,7 @@ def suppress(out=True, err=False):
             if err:
                 stack.enter_context(redirect_stderr(null))
             yield
+
 
 def test_detect_32():
     with suppress():
@@ -40,13 +42,15 @@ def test_detect_64():
 def test_leak_32():
     with suppress():
         test_file = "tests/bin/read_stack_32"
-        properties = {"pwn_type" : {}, "pwn" : {}, "input_type" : "STDIN"}
+        properties = {"pwn_type": {}, "pwn": {}, "input_type": "STDIN"}
 
         properties["protections"] = protectionDetector.getProperties(test_file)
     assert properties["protections"]["arch"]
 
     with suppress():
-        properties["pwn_type"] = formatDetector.checkFormat(test_file, inputType=properties["input_type"])
+        properties["pwn_type"] = formatDetector.checkFormat(
+            test_file, inputType=properties["input_type"]
+        )
 
     assert properties["pwn_type"]["type"] == "Format"
     with suppress():
@@ -56,14 +60,16 @@ def test_leak_32():
 
 def test_leak_64():
     test_file = "tests/bin/read_stack_64"
-    properties = {"pwn_type" : {}, "pwn" : {}, "input_type" : "STDIN"}
+    properties = {"pwn_type": {}, "pwn": {}, "input_type": "STDIN"}
 
     with suppress():
         properties["protections"] = protectionDetector.getProperties(test_file)
     assert properties["protections"]["arch"]
 
     with suppress():
-        properties["pwn_type"] = formatDetector.checkFormat(test_file, inputType=properties["input_type"])
+        properties["pwn_type"] = formatDetector.checkFormat(
+            test_file, inputType=properties["input_type"]
+        )
 
     assert properties["pwn_type"]["type"] == "Format"
     with suppress():
@@ -73,7 +79,7 @@ def test_leak_64():
 
 def test_win_32():
     test_file = "tests/bin/format_pc_write_32"
-    properties = {"pwn_type" : {}, "pwn" : {}, "input_type" : "STDIN"}
+    properties = {"pwn_type": {}, "pwn": {}, "input_type": "STDIN"}
 
     with suppress():
         properties["protections"] = protectionDetector.getProperties(test_file)
@@ -85,7 +91,9 @@ def test_win_32():
     assert "sym.secret_function" in properties["win_functions"]
 
     with suppress():
-        properties["pwn_type"] = formatDetector.checkFormat(test_file, inputType=properties["input_type"])
+        properties["pwn_type"] = formatDetector.checkFormat(
+            test_file, inputType=properties["input_type"]
+        )
     assert properties["pwn_type"]["type"] == "Format"
 
     with suppress():
@@ -95,10 +103,19 @@ def test_win_32():
 
     assert "flag_found" in properties["pwn_type"]["results"].keys()
 
-@pytest.mark.skip(reason="fgets is clobbering null byte")
+
 def test_win_64():
+    import logging
+    logging.basicConfig()
+    logging.root.setLevel(logging.INFO)
     test_file = "tests/bin/format_pc_write_64"
-    properties = {"pwn_type" : {}, "pwn" : {}, "input_type" : "STDIN"}
+    properties = {"pwn_type": {}, "pwn": {}, "input_type": "STDIN"}
+
+    with suppress():
+        properties["pwn_type"] = formatDetector.checkFormat(
+            test_file, inputType=properties["input_type"]
+        )
+    assert properties["pwn_type"]["type"] == "Format"
 
     with suppress():
         properties["protections"] = protectionDetector.getProperties(test_file)
@@ -109,12 +126,8 @@ def test_win_64():
     assert "sym.secret_function" in properties["win_functions"]
 
     with suppress():
-        properties["pwn_type"] = formatDetector.checkFormat(test_file, inputType=properties["input_type"])
-    assert properties["pwn_type"]["type"] == "Format"
-
-    with suppress():
         properties["pwn_type"]["results"] = formatExploiter.exploitFormat(
             test_file, properties
         )
 
-    assert "flag_found" in properties["pwn_type"].keys()
+    assert "flag_found" in properties["pwn_type"]["results"].keys()

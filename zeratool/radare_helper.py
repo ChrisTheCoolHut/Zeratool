@@ -1,22 +1,25 @@
 import r2pipe
 import json
 import os
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def getRegValues(filename, endAddr=None):
 
-    r2 = r2pipe.open(filename,flags=["-d"])
-    #r2.cmd("doo")
+    r2 = r2pipe.open(filename, flags=["-d"])
+    # r2.cmd("doo")
     if endAddr:
         r2.cmd("dcu {}".format(endAddr))
     else:
         r2.cmd("e dbg.bep=entry")
-        entry_addr = json.loads(r2.cmd("iej"))[0]["vaddr"] 
+        entry_addr = json.loads(r2.cmd("iej"))[0]["vaddr"]
         r2.cmd("dcu {}".format(entry_addr))
     # drj command is broken in r2 right now
     # so use drrj
     regs = json.loads(r2.cmd("drrj"))
-    regs = dict([(x['reg'],int(x['value'],16)) for x in regs])
+    regs = dict([(x["reg"], int(x["value"], 16)) for x in regs])
     r2.quit()
     return regs
 
@@ -51,7 +54,11 @@ def findShellcode(filename, endAddr, shellcode, commandInput):
         # f.write(
         #     "program={}\nstdin=command.input\nenvfile={}\n".format(filename, "temp.env")
         # )
-            f.write("program={}\nstdin=command.input\nclearenv=true\nenvfile={}\n".format(abs_path,"temp.env"))
+        f.write(
+            "program={}\nstdin=command.input\nclearenv=true\nenvfile={}\n".format(
+                abs_path, "temp.env"
+            )
+        )
 
     r2 = r2pipe.open(filename)
     r2.cmd("e dbg.profile = temp.rr2")
@@ -62,7 +69,6 @@ def findShellcode(filename, endAddr, shellcode, commandInput):
     r2.cmd("e search.in=dbg.map")  # Need to specify this for r2pipe
 
     loc = json.loads(r2.cmd("/xj {}".format(hex_str)))
-
     # Cleaning up
     if os.path.exists("command.input"):
         os.remove("command.input")
