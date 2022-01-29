@@ -27,8 +27,8 @@ def checkOverflow(binary_name, inputType="STDIN"):
 
     p = angr.Project(binary_name, load_options={"auto_load_libs": False})
     # Hook rands
-    p.hook_symbol("rand", hookFour)
-    p.hook_symbol("srand", hookFour)
+    p.hook_symbol("rand", hookFour())
+    p.hook_symbol("srand", hookFour())
     # p.hook_symbol('fgets',angr.SIM_PROCEDURES['libc']['gets']())
 
     # Setup state based on input type

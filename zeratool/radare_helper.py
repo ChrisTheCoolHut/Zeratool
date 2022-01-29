@@ -19,7 +19,7 @@ def getRegValues(filename, endAddr=None):
     # drj command is broken in r2 right now
     # so use drrj
     regs = json.loads(r2.cmd("drrj"))
-    regs = dict([(x["reg"], int(x["value"], 16)) for x in regs])
+    regs = dict([(x["reg"], int(x["value"], 16)) for x in regs if x["reg"] != "rflags"])
     r2.quit()
     return regs
 
