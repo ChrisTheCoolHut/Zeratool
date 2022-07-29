@@ -4,7 +4,7 @@ import claripy
 import time
 import timeout_decorator
 import IPython
-from .simgr_helper import overflow_detect_filter
+from .simgr_helper import overflow_detect_filter, hook_win, hook_four
 import logging
 
 log = logging.getLogger(__name__)
@@ -19,16 +19,12 @@ def checkOverflow(binary_name, inputType="STDIN"):
         so.SYMBOL_FILL_UNCONSTRAINED_REGISTERS,
     }
 
-    class hookFour(angr.SimProcedure):
-        IS_FUNCTION = True
-
-        def run(self):
-            return 4  # Fair dice roll
-
     p = angr.Project(binary_name, load_options={"auto_load_libs": False})
     # Hook rands
-    p.hook_symbol("rand", hookFour())
-    p.hook_symbol("srand", hookFour())
+    p.hook_symbol("rand", hook_four())
+    p.hook_symbol("srand", hook_four())
+
+    p.hook_symbol("system", hook_win())
     # p.hook_symbol('fgets',angr.SIM_PROCEDURES['libc']['gets']())
 
     # Setup state based on input type
@@ -72,8 +68,7 @@ def checkOverflow(binary_name, inputType="STDIN"):
     except (KeyboardInterrupt, timeout_decorator.TimeoutError) as e:
         log.info("[~] Keyboard Interrupt")
 
-    if "input" in run_environ.keys():
+    if "input" in run_environ.keys() or run_environ["type"] == "overflow_variable":
         run_environ["input"] = end_state.globals["input"]
         log.info("[+] Triggerable with input : {}".format(end_state.globals["input"]))
-
     return run_environ

@@ -61,6 +61,8 @@ class printFormat(angr.procedures.libc.printf.printf):
         #             raise Exception("fmt string with no length!")
         #     state.add_constraints(fmt_len == max_read_len)
 
+        if len(self.arguments) <= i:
+            return False
         printf_arg = self.arguments[i]
 
         var_loc = solv(printf_arg)
@@ -333,7 +335,11 @@ class printf_leak_detect(angr.procedures.libc.printf.printf):
         will consume them and prevent us from printing
         normally, so we need to make a copy.
         """
-        va_args_copy = copy.deepcopy(self)
+        try:
+            va_args_copy = copy.deepcopy(self)
+        except:
+            # Just bail out
+            return super(type(self), self).run(fmt)
 
         va_args_copy.check_for_leak(fmt)
 
