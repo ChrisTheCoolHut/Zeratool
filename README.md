@@ -9,6 +9,8 @@ This tool uses [angr](https://github.com/angr/angr) to concolically analyze bina
 
 Zeratool now supports remote libc leaking with buffer overflows. When a `puts` or `printf` call is present, Zeratool will leak out remote GOT entries and submit them to an online libc searching database to find offsets without the need for a local copy of the library.
 
+[See remote libc leak in action!](https://asciinema.org/a/LL2ASZkIwEdwR0xsnzMb3oFLp)
+
 Zeratool supports some basic ret2dlresolve chaining for 64bit binaries. See the example below on how to run it.
 
 ## Version 2.1 changes
