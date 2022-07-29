@@ -106,6 +106,7 @@ def test_win_32():
 
 def test_win_64():
     import logging
+
     logging.basicConfig()
     logging.root.setLevel(logging.INFO)
     test_file = "tests/bin/format_pc_write_64"
